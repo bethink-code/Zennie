@@ -93,11 +93,18 @@ export function levelStrengthForTouches(touches: number): LevelStrength {
 export type PoolStatus = "active" | "dead";
 export type DeathReason = "engulfing" | "sustained_break" | "score_exhaustion";
 
+// Two paths to pool graduation. Both produce a rectangle on the canvas;
+// the difference is WHY the pool exists.
+//   historical_respect — multi-touch tested level (traditional S/R pool)
+//   untaken_liquidity  — recent dramatic rejection wick (LuxAlgo-style target)
+export type PoolKind = "historical_respect" | "untaken_liquidity";
+
 export interface AnalysisPool {
   id: string;
   symbol: string;
   timeframe: Timeframe;
   type: "RESISTANCE" | "SUPPORT";
+  kind: PoolKind;
   wickHigh: number;
   wickLow: number;
   centreLine: number;
@@ -298,6 +305,7 @@ export async function runAnalysis(
           symbol: input.symbol,
           timeframe: input.timeframe,
           type: side,
+          kind: "historical_respect",
           wickHigh: boundaries.wickHigh,
           wickLow: boundaries.wickLow,
           centreLine: boundaries.centreLine,
@@ -311,6 +319,85 @@ export async function runAnalysis(
           validationFailures: [],
         });
         levels[levels.length - 1].graduatedToPoolId = poolId;
+      }
+    }
+
+    // ── Untaken-liquidity pool graduation path ─────────────────────────
+    // After the historical-respect path runs, also check newly-created levels
+    // for the LuxAlgo-style "untaken liquidity" criterion: recent dramatic
+    // rejection wick. These graduate to pools even with low touch counts
+    // because they're targets, not retested support.
+    if (newPivots.length > 0) {
+      for (const pivot of newPivots) {
+        const recency = pivot.index / Math.max(1, candles.length - 1);
+        if (recency < 0.7) continue; // only the last 30% of the window
+
+        // Find the matching level we just created (it has graduatedToPoolId
+        // === null if it didn't qualify for the historical-respect path)
+        const level = levels.find(
+          (l) =>
+            l.swingCandleIndex === pivot.index &&
+            l.side === (pivot.type === "swing_high" ? "RESISTANCE" : "SUPPORT"),
+        );
+        if (!level || level.graduatedToPoolId !== null) continue;
+
+        // Dramatic-wick check: the rejection portion of the candle is at
+        // least 40% of the candle range. Long upper wick on a swing high or
+        // long lower wick on a swing low. This is what marks "untaken
+        // liquidity" — a clear stop hunt that price hasn't returned to.
+        const c = candles[pivot.index];
+        const range = c.high - c.low;
+        if (range <= 0) continue;
+        const wickPortion =
+          pivot.type === "swing_high"
+            ? (c.high - Math.max(c.open, c.close)) / range
+            : (Math.min(c.open, c.close) - c.low) / range;
+        if (wickPortion < 0.4) continue;
+
+        // Compute boundaries from the pivot candle alone
+        const tolerance = adaptiveTolerance({
+          candles: candles.slice(0, i + 1),
+        });
+        const side: "RESISTANCE" | "SUPPORT" =
+          pivot.type === "swing_high" ? "RESISTANCE" : "SUPPORT";
+        const boundaries = setPoolBoundaries({
+          candidatePrice: level.price,
+          side,
+          candles: candles.slice(0, i + 1),
+          currentPrice: candles[i].close,
+          provisionalTolerancePct: tolerance,
+        });
+
+        // Score it (most components will be zero/low — that's expected for
+        // an untaken liquidity pool — the kind tag tells you why it's here).
+        const breakdown = scoreNewPool({
+          touchCount: level.touchCount,
+          volumePercentile: 0.5, // not measured for this path
+          candidatePrice: level.price,
+          candles: candles.slice(0, i + 1),
+          side,
+        });
+
+        const poolId = `pool-liq-${input.symbol}-${input.timeframe}-${pivot.index}-${Math.round(level.price)}`;
+        pools.push({
+          id: poolId,
+          symbol: input.symbol,
+          timeframe: input.timeframe,
+          type: side,
+          kind: "untaken_liquidity",
+          wickHigh: boundaries.wickHigh,
+          wickLow: boundaries.wickLow,
+          centreLine: boundaries.centreLine,
+          birthCandleTime: candles[pivot.index].openTime,
+          birthCandleIndex: pivot.index,
+          deathCandleTime: null,
+          deathCandleIndex: null,
+          deathReason: null,
+          status: "active",
+          scoreBreakdown: breakdown,
+          validationFailures: [],
+        });
+        level.graduatedToPoolId = poolId;
       }
     }
 
