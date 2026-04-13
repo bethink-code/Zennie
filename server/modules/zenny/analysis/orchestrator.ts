@@ -43,14 +43,51 @@ export interface AnalysisLevel {
   graduatedToPoolId: string | null;
 }
 
-// Map touch count to strength tier. Used both for rendering opacity and for
-// the Levels panel display. Pure function — exposed so the harness can sweep.
-export function levelStrengthForTouches(touches: number): LevelStrength {
+// Map touch count to historical-respect strength tier. The level has been
+// tested N times and held — high count = strong support. Pure.
+export function strengthFromTouches(touches: number): LevelStrength {
   if (touches >= 6) return "very_strong";
   if (touches >= 4) return "strong";
   if (touches >= 3) return "medium";
   if (touches >= 2) return "weak";
   return "trivial";
+}
+
+// Map recency (0 = oldest in window, 1 = newest) to strength tier. A recent
+// untested swing low is "untaken liquidity" — it's a magnet for stops and
+// unfilled orders, not historical support. LuxAlgo / SMC concept. Pure.
+export function strengthFromRecency(recency: number): LevelStrength {
+  if (recency >= 0.95) return "very_strong";
+  if (recency >= 0.85) return "strong";
+  if (recency >= 0.7) return "medium";
+  return "trivial";
+}
+
+const STRENGTH_RANK: Record<LevelStrength, number> = {
+  trivial: 0,
+  weak: 1,
+  medium: 2,
+  strong: 3,
+  very_strong: 4,
+};
+
+// Combined level strength = max of the two dimensions. A level is strong if
+// EITHER it's been heavily tested OR it's recent and untested liquidity.
+// These are opposite signals on touch count: high touches = strong support,
+// zero touches + recent = strong target. Both matter; render the higher tier.
+export function combinedLevelStrength(
+  touches: number,
+  recency: number,
+): LevelStrength {
+  const a = strengthFromTouches(touches);
+  const b = strengthFromRecency(recency);
+  return STRENGTH_RANK[a] >= STRENGTH_RANK[b] ? a : b;
+}
+
+// Backwards-compatible single-input wrapper for any caller that only has
+// touches (kept so existing test/code paths still work).
+export function levelStrengthForTouches(touches: number): LevelStrength {
+  return strengthFromTouches(touches);
 }
 
 export type PoolStatus = "active" | "dead";
@@ -173,20 +210,26 @@ export async function runAnalysis(
         const candidatePrice = pivot.price;
 
         // Touch count for STRENGTH/visualisation: use the full candle window so
-        // visits that happen AFTER the pivot stabilises are counted. This
-        // answers "how meaningful is this level across the visible chart?"
-        // The validation pipeline below uses a different (history-only) count
-        // because it must answer "would the engine have known this live?"
+        // visits that happen AFTER the pivot stabilises are counted.
         const fullWindowTouches = countTouches({
-          candles, // full window, including post-pivot candles
+          candles,
           price: candidatePrice,
           tolerancePct: tolerance,
           side,
         }).length;
 
+        // Recency: 1.0 = most recent candle, 0.0 = oldest. A recent untested
+        // swing low / high is "untaken liquidity" — a target — and deserves
+        // strong rendering even with zero retests. (LuxAlgo / SMC concept.)
+        const recency = pivot.index / Math.max(1, candles.length - 1);
+
+        // Combined strength = max of historical-respect tier and recency tier.
+        // High touches = strong historical support. High recency + low touches
+        // = strong untaken-liquidity target. Both render strongly.
+        const strength = combinedLevelStrength(fullWindowTouches, recency);
+
         // Record the level (every candidate gets a level entry, even if it
-        // never graduates to a pool — strong unattended levels are useful
-        // visual context).
+        // never graduates to a pool).
         const levelId = `lvl-${input.symbol}-${input.timeframe}-${pivot.index}-${Math.round(candidatePrice)}`;
         levels.push({
           id: levelId,
@@ -196,7 +239,7 @@ export async function runAnalysis(
           swingCandleIndex: pivot.index,
           source: "extrema",
           touchCount: fullWindowTouches,
-          strength: levelStrengthForTouches(fullWindowTouches),
+          strength,
           graduatedToPoolId: null,
         });
 

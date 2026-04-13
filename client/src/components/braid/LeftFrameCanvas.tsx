@@ -123,23 +123,27 @@ function drawScene(
   }
 
   // ---- LEVELS (drawn first, behind everything) ----
-  // Opacity scales with touch count so the eye reads importance directly.
-  // Trivial (1 touch, just the pivot) barely visible; very_strong (6+) ~ 0.65.
+  // Side-coloured: red for resistance, green for support.
+  // Opacity and weight scale with strength so the eye reads importance directly.
   for (const level of state.levels) {
     if (level.graduatedToPoolId !== null) continue; // pools draw the rectangle themselves
     const y = toY(level.price);
     if (y < pad.t || y > pad.t + ch) continue;
     const opacity = levelOpacity(level.strength);
-    ctx.strokeStyle = `rgba(61,61,58,${opacity})`;
-    // Thicker for stronger levels so they pop visually
+    // 226,75,74 = the resistance red used for pools. 29,158,117 = support green.
+    const rgb =
+      level.side === "RESISTANCE" ? "226,75,74" : "29,158,117";
+    ctx.strokeStyle = `rgba(${rgb},${opacity})`;
     ctx.lineWidth =
       level.strength === "very_strong"
-        ? 1.2
+        ? 1.6
         : level.strength === "strong"
-          ? 1.0
+          ? 1.2
           : level.strength === "medium"
-            ? 0.8
-            : 0.5;
+            ? 0.9
+            : level.strength === "weak"
+              ? 0.6
+              : 0.5;
     const startX = toX(Math.max(0, level.swingCandleIndex));
     ctx.beginPath();
     ctx.moveTo(startX, y);
@@ -245,22 +249,24 @@ function formatPrice(p: number): string {
   return "$" + p.toFixed(4);
 }
 
-// Opacity scale per level strength tier. Five steps from barely-visible
-// "trivial" up to the most-respected "very_strong" levels.
+// Opacity scale per level strength tier. Five steps from visibly-grey
+// "trivial" up to dark "very_strong" levels. The previous scale started
+// at 0.10 which was below the perceptual threshold on the warm-white
+// background; trivial levels rendered as effectively invisible.
 function levelOpacity(
   strength: AnalysisStateClient["levels"][number]["strength"],
 ): number {
   switch (strength) {
     case "very_strong":
-      return 0.65;
+      return 0.85;
     case "strong":
-      return 0.45;
+      return 0.65;
     case "medium":
-      return 0.3;
+      return 0.5;
     case "weak":
-      return 0.18;
+      return 0.35;
     case "trivial":
     default:
-      return 0.1;
+      return 0.22;
   }
 }
