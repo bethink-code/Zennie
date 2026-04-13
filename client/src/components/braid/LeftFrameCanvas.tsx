@@ -123,18 +123,31 @@ function drawScene(
   }
 
   // ---- LEVELS (drawn first, behind everything) ----
-  ctx.strokeStyle = C.level;
-  ctx.lineWidth = 0.5;
+  // Opacity scales with touch count so the eye reads importance directly.
+  // Trivial (1 touch, just the pivot) barely visible; very_strong (6+) ~ 0.65.
   for (const level of state.levels) {
-    if (level.graduatedToPoolId !== null) continue; // pools draw the line themselves
+    if (level.graduatedToPoolId !== null) continue; // pools draw the rectangle themselves
     const y = toY(level.price);
     if (y < pad.t || y > pad.t + ch) continue;
+    const opacity = levelOpacity(level.strength);
+    ctx.strokeStyle = `rgba(61,61,58,${opacity})`;
+    // Thicker for stronger levels so they pop visually
+    ctx.lineWidth =
+      level.strength === "very_strong"
+        ? 1.2
+        : level.strength === "strong"
+          ? 1.0
+          : level.strength === "medium"
+            ? 0.8
+            : 0.5;
     const startX = toX(Math.max(0, level.swingCandleIndex));
     ctx.beginPath();
     ctx.moveTo(startX, y);
     ctx.lineTo(pad.l + cw, y);
     ctx.stroke();
   }
+  // Reset stroke styling for what comes next
+  ctx.lineWidth = 1;
 
   // ---- POOLS ----
   // Render active pools first (translucent, behind candles), then dead pools
@@ -230,4 +243,24 @@ function formatPrice(p: number): string {
   if (p >= 1_000) return "$" + p.toFixed(0);
   if (p >= 1) return "$" + p.toFixed(2);
   return "$" + p.toFixed(4);
+}
+
+// Opacity scale per level strength tier. Five steps from barely-visible
+// "trivial" up to the most-respected "very_strong" levels.
+function levelOpacity(
+  strength: AnalysisStateClient["levels"][number]["strength"],
+): number {
+  switch (strength) {
+    case "very_strong":
+      return 0.65;
+    case "strong":
+      return 0.45;
+    case "medium":
+      return 0.3;
+    case "weak":
+      return 0.18;
+    case "trivial":
+    default:
+      return 0.1;
+  }
 }

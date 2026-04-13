@@ -1,14 +1,44 @@
 // Admin Panel 1 — Level Identification.
 // Lists every detected level. Some graduate to pools; most don't.
+// Sorted by strength (touch count) so the most-respected levels are at the top.
 
-import type { AnalysisStateClient } from "./types";
+import type { AnalysisStateClient, LevelStrengthClient } from "./types";
 
 interface Props {
   state: AnalysisStateClient;
 }
 
+const STRENGTH_RANK: Record<LevelStrengthClient, number> = {
+  very_strong: 4,
+  strong: 3,
+  medium: 2,
+  weak: 1,
+  trivial: 0,
+};
+
+const STRENGTH_LABEL: Record<LevelStrengthClient, string> = {
+  very_strong: "very strong",
+  strong: "strong",
+  medium: "medium",
+  weak: "weak",
+  trivial: "trivial",
+};
+
+const STRENGTH_COLOUR: Record<LevelStrengthClient, string> = {
+  very_strong: "text-[#3d3d3a] font-medium",
+  strong: "text-[#5F5E5A]",
+  medium: "text-[#73726c]",
+  weak: "text-[#888780]",
+  trivial: "text-[#a8a7a0]",
+};
+
 export function LevelPanel({ state }: Props) {
-  const sorted = [...state.levels].sort((a, b) => b.price - a.price);
+  // Sort by strength desc, then by price desc within each tier
+  const sorted = [...state.levels].sort((a, b) => {
+    const ds = STRENGTH_RANK[b.strength] - STRENGTH_RANK[a.strength];
+    if (ds !== 0) return ds;
+    return b.price - a.price;
+  });
   const graduated = state.levels.filter((l) => l.graduatedToPoolId !== null).length;
 
   return (
@@ -24,7 +54,9 @@ export function LevelPanel({ state }: Props) {
           <thead className="text-[#888780] sticky top-0 bg-white">
             <tr>
               <th className="text-left px-3 py-2">Price</th>
-              <th className="text-left px-3 py-2">Side</th>
+              <th className="text-left px-2 py-2">Side</th>
+              <th className="text-right px-2 py-2">Touches</th>
+              <th className="text-right px-2 py-2">Strength</th>
               <th className="text-right px-3 py-2">Status</th>
             </tr>
           </thead>
@@ -32,7 +64,7 @@ export function LevelPanel({ state }: Props) {
             {sorted.map((l) => (
               <tr key={l.id} className="border-t border-black/5">
                 <td className="px-3 py-1.5 font-mono">{formatPrice(l.price)}</td>
-                <td className="px-3 py-1.5">
+                <td className="px-2 py-1.5">
                   <span
                     className={
                       l.side === "RESISTANCE"
@@ -42,6 +74,12 @@ export function LevelPanel({ state }: Props) {
                   >
                     {l.side === "RESISTANCE" ? "RES" : "SUP"}
                   </span>
+                </td>
+                <td className="px-2 py-1.5 text-right font-mono">{l.touchCount}</td>
+                <td
+                  className={`px-2 py-1.5 text-right text-[10px] ${STRENGTH_COLOUR[l.strength]}`}
+                >
+                  {STRENGTH_LABEL[l.strength]}
                 </td>
                 <td className="px-3 py-1.5 text-right">
                   {l.graduatedToPoolId !== null ? (
@@ -54,7 +92,7 @@ export function LevelPanel({ state }: Props) {
             ))}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={3} className="px-3 py-4 text-center text-[#888780]">
+                <td colSpan={5} className="px-3 py-4 text-center text-[#888780]">
                   no levels detected
                 </td>
               </tr>

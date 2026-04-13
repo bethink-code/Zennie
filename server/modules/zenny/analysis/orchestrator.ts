@@ -10,7 +10,6 @@ import type { Candle, Timeframe } from "../../../../shared/zennyTypes";
 import type { MarketDataProvider } from "../infrastructure/providers/providerInterface";
 import { getCandles } from "./data/getCandles";
 import { findLocalExtrema } from "./candle/findLocalExtrema";
-import { classifyCandle } from "./candle/classifyCandle";
 import { countTouches } from "./candle/countTouches";
 import { clusterPriceLevels } from "./level/clusterPriceLevels";
 import { adaptiveTolerance } from "./level/adaptiveTolerance";
@@ -30,6 +29,8 @@ import { aggregatePoolScore } from "./score/aggregatePoolScore";
 // ---------------------------------------------------------------------------
 // Output types
 
+export type LevelStrength = "trivial" | "weak" | "medium" | "strong" | "very_strong";
+
 export interface AnalysisLevel {
   id: string;
   price: number;
@@ -37,7 +38,19 @@ export interface AnalysisLevel {
   swingCandleTime: number;
   swingCandleIndex: number;
   source: "extrema" | "tick" | "both";
+  touchCount: number; // total candles in the lookback whose range crossed the level band
+  strength: LevelStrength; // derived from touchCount
   graduatedToPoolId: string | null;
+}
+
+// Map touch count to strength tier. Used both for rendering opacity and for
+// the Levels panel display. Pure function — exposed so the harness can sweep.
+export function levelStrengthForTouches(touches: number): LevelStrength {
+  if (touches >= 6) return "very_strong";
+  if (touches >= 4) return "strong";
+  if (touches >= 3) return "medium";
+  if (touches >= 2) return "weak";
+  return "trivial";
 }
 
 export type PoolStatus = "active" | "dead";
@@ -159,7 +172,20 @@ export async function runAnalysis(
         const side = pivot.type === "swing_high" ? "RESISTANCE" : "SUPPORT";
         const candidatePrice = pivot.price;
 
-        // Record the level (every candidate gets a level entry)
+        // Compute touch count for this level once at creation time.
+        // Used both for strength tiering and (immediately below) for validation.
+        const historyForLevel = candles.slice(0, i + 1);
+        const touchInfo = countTouches({
+          candles: historyForLevel,
+          price: candidatePrice,
+          tolerancePct: tolerance,
+          side,
+        });
+        const touchCount = touchInfo.length;
+
+        // Record the level (every candidate gets a level entry, even if it
+        // never graduates to a pool — strong unattended levels are useful
+        // visual context).
         const levelId = `lvl-${input.symbol}-${input.timeframe}-${pivot.index}-${Math.round(candidatePrice)}`;
         levels.push({
           id: levelId,
@@ -168,6 +194,8 @@ export async function runAnalysis(
           swingCandleTime: candles[pivot.index].openTime,
           swingCandleIndex: pivot.index,
           source: "extrema",
+          touchCount,
+          strength: levelStrengthForTouches(touchCount),
           graduatedToPoolId: null,
         });
 

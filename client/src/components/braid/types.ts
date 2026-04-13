@@ -14,6 +14,13 @@ export interface ScoreBreakdownClient {
   total: number;
 }
 
+export type LevelStrengthClient =
+  | "trivial"
+  | "weak"
+  | "medium"
+  | "strong"
+  | "very_strong";
+
 export interface AnalysisLevelClient {
   id: string;
   price: number;
@@ -21,6 +28,8 @@ export interface AnalysisLevelClient {
   swingCandleTime: number;
   swingCandleIndex: number;
   source: "extrema" | "tick" | "both";
+  touchCount: number;
+  strength: LevelStrengthClient;
   graduatedToPoolId: string | null;
 }
 
