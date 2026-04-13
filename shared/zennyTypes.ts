@@ -1,7 +1,25 @@
 // Shared types for the Zenny engine.
 // Server imports relative (../shared/zennyTypes); client uses @shared/zennyTypes.
 
-export type Timeframe = "15m" | "1H" | "4H" | "12H" | "D";
+export type Timeframe = "15m" | "1H" | "4H" | "12H" | "D" | "W" | "M";
+
+// The full multi-TF stack analysed in one run (Phase 2 refactor).
+// 12H is kept in the type for backwards-compat but is no longer in the
+// default analysis stack — Weekly + Monthly matter more for level detection
+// than a half-day intermediate.
+export const DEFAULT_TIMEFRAME_STACK: Timeframe[] = [
+  "15m",
+  "1H",
+  "4H",
+  "D",
+  "W",
+  "M",
+];
+
+// The "trader's four" — these contribute to confluence scoring.
+// 15m and 1H are execution-only; their lines render but don't factor
+// into confluence count.
+export const CONFLUENCE_TIMEFRAMES: Timeframe[] = ["4H", "D", "W", "M"];
 
 export interface Candle {
   openTime: number; // ms epoch, candle open

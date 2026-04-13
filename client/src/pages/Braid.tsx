@@ -12,8 +12,9 @@ import { ScoringPanel } from "@/components/braid/ScoringPanel";
 import type { AnalysisStateClient } from "@/components/braid/types";
 
 const TIMEFRAMES: Array<{ value: string; label: string }> = [
+  { value: "M", label: "Monthly" },
+  { value: "W", label: "Weekly" },
   { value: "D", label: "Daily" },
-  { value: "12H", label: "12 H" },
   { value: "4H", label: "4 H" },
   { value: "1H", label: "1 H" },
   { value: "15m", label: "15 m" },
@@ -111,7 +112,10 @@ export default function Braid() {
                 label="Pools taken"
                 value={data.pools.filter((p) => p.status === "dead").length.toString()}
               />
-              <Stat label="Rejected" value={data.rejectedCandidates.length.toString()} />
+              <Stat
+                label="TFs analysed"
+                value={data.analysedTimeframes.join("/")}
+              />
               <Stat
                 label="Latest close"
                 value={

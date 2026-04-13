@@ -1,29 +1,27 @@
 import { describe, it, expect } from "vitest";
 import {
-  strengthFromTouches,
+  strengthFromConfluence,
   strengthFromRecency,
   combinedLevelStrength,
   STRENGTH_RANK,
 } from "./strength";
 
-describe("strengthFromTouches", () => {
-  it("trivial for 0 or 1 touch", () => {
-    expect(strengthFromTouches(0)).toBe("trivial");
-    expect(strengthFromTouches(1)).toBe("trivial");
+describe("strengthFromConfluence", () => {
+  it("trivial for 0 confluence", () => {
+    expect(strengthFromConfluence(0)).toBe("trivial");
   });
-  it("weak for 2", () => {
-    expect(strengthFromTouches(2)).toBe("weak");
+  it("weak for 1 TF (local only)", () => {
+    expect(strengthFromConfluence(1)).toBe("weak");
   });
-  it("medium for 3 (boundary)", () => {
-    expect(strengthFromTouches(3)).toBe("medium");
+  it("medium for 2 TFs", () => {
+    expect(strengthFromConfluence(2)).toBe("medium");
   });
-  it("strong for 4-5", () => {
-    expect(strengthFromTouches(4)).toBe("strong");
-    expect(strengthFromTouches(5)).toBe("strong");
+  it("strong for 3 TFs (structural)", () => {
+    expect(strengthFromConfluence(3)).toBe("strong");
   });
-  it("very_strong for 6+ (boundary)", () => {
-    expect(strengthFromTouches(6)).toBe("very_strong");
-    expect(strengthFromTouches(100)).toBe("very_strong");
+  it("very_strong for 4+ TFs (cycle-defining megalevel)", () => {
+    expect(strengthFromConfluence(4)).toBe("very_strong");
+    expect(strengthFromConfluence(5)).toBe("very_strong");
   });
 });
 
@@ -47,22 +45,25 @@ describe("strengthFromRecency", () => {
 
 describe("combinedLevelStrength", () => {
   it("returns the max of the two tiers", () => {
-    // High touches, low recency → historical wins
-    expect(combinedLevelStrength(6, 0.1)).toBe("very_strong");
-    // Low touches, high recency → recency wins
+    // Full confluence, old → confluence wins
+    expect(combinedLevelStrength(4, 0.1)).toBe("very_strong");
+    // No confluence, very recent → recency wins
     expect(combinedLevelStrength(1, 0.97)).toBe("very_strong");
-    // Both medium → medium
-    expect(combinedLevelStrength(3, 0.75)).toBe("medium");
+    // 2-TF + moderately recent → medium (both are medium)
+    expect(combinedLevelStrength(2, 0.75)).toBe("medium");
   });
 
-  it("the dramatic untaken-liquidity case: 1 touch + recent", () => {
-    // The user's $58k example: dramatic swing low, zero retests, very recent
+  it("the dramatic untaken-liquidity case: 1 TF + very recent", () => {
+    // A fresh swing low that nothing else agrees with yet, but it's the most recent
     expect(combinedLevelStrength(1, 0.97)).toBe("very_strong");
   });
 
-  it("an old retested level still wins on history", () => {
-    // 6 touches but at the very start of the window
-    expect(combinedLevelStrength(6, 0.0)).toBe("very_strong");
+  it("an old level with all four TFs agreeing is still very_strong", () => {
+    expect(combinedLevelStrength(4, 0.0)).toBe("very_strong");
+  });
+
+  it("structural 3-TF level beats medium recency", () => {
+    expect(combinedLevelStrength(3, 0.5)).toBe("strong");
   });
 
   it("trivial when both are weak", () => {

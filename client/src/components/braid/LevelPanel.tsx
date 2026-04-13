@@ -1,6 +1,6 @@
-// Admin Panel 1 — Level Identification.
-// Lists every detected level. Some graduate to pools; most don't.
-// Sorted by strength (touch count) so the most-respected levels are at the top.
+// Admin Panel 1 — Level Identification (Phase 2 multi-TF version).
+// Lists every detected level. Each level shows its source TF and the other
+// TFs it's confluent with. Sorted by strength descending.
 
 import type { AnalysisStateClient, LevelStrengthClient } from "./types";
 
@@ -33,7 +33,6 @@ const STRENGTH_COLOUR: Record<LevelStrengthClient, string> = {
 };
 
 export function LevelPanel({ state }: Props) {
-  // Sort by strength desc, then by price desc within each tier
   const sorted = [...state.levels].sort((a, b) => {
     const ds = STRENGTH_RANK[b.strength] - STRENGTH_RANK[a.strength];
     if (ds !== 0) return ds;
@@ -55,9 +54,9 @@ export function LevelPanel({ state }: Props) {
             <tr>
               <th className="text-left px-3 py-2">Price</th>
               <th className="text-left px-2 py-2">Side</th>
-              <th className="text-right px-2 py-2">Touches</th>
+              <th className="text-left px-2 py-2">Source</th>
+              <th className="text-left px-2 py-2">Confluent with</th>
               <th className="text-right px-2 py-2">Strength</th>
-              <th className="text-right px-3 py-2">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -75,18 +74,23 @@ export function LevelPanel({ state }: Props) {
                     {l.side === "RESISTANCE" ? "RES" : "SUP"}
                   </span>
                 </td>
-                <td className="px-2 py-1.5 text-right font-mono">{l.touchCount}</td>
+                <td className="px-2 py-1.5 font-mono text-[10px]">
+                  {l.sourceTimeframe}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-[10px] text-[#5F5E5A]">
+                  {l.matchingTimeframes.length === 0
+                    ? "—"
+                    : l.matchingTimeframes.join("+")}
+                  {l.confluenceCount >= 2 && (
+                    <span className="ml-1 text-[#888780]">
+                      ({l.confluenceCount}×)
+                    </span>
+                  )}
+                </td>
                 <td
                   className={`px-2 py-1.5 text-right text-[10px] ${STRENGTH_COLOUR[l.strength]}`}
                 >
                   {STRENGTH_LABEL[l.strength]}
-                </td>
-                <td className="px-3 py-1.5 text-right">
-                  {l.graduatedToPoolId !== null ? (
-                    <span className="text-[#0F6E56] font-medium">POOL →</span>
-                  ) : (
-                    <span className="text-[#888780]">level</span>
-                  )}
                 </td>
               </tr>
             ))}

@@ -1,13 +1,13 @@
-// Left-frame canvas — renders candles + levels + pools.
-// Phase 1 minimum: no wire, no verdict dots, no right-frame arms, no now badge.
-// Visual values borrowed directly from Scratch/zenny_braid_three_layer.html (per the
-// "HTML mockups are visual references only" rule — they win on colours and spacing).
+// Left-frame canvas — multi-TF levels with confluence weighting.
+// Phase 2 refactor: lines are drawn at the close of the swing candle on each
+// source TF, extending from the source candle X-position to the right edge.
+// Stronger levels (higher confluence) render with more opacity + weight.
+// Pools are one-sided rectangles on the stops side of the line.
 
 import { useEffect, useRef } from "react";
-import type { AnalysisStateClient } from "./types";
+import type { AnalysisStateClient, LevelStrengthClient } from "./types";
 
-// Palette — extracted from the mockup. Dead-pool opacities added per the
-// "translucent alive / opaque taken" visual contract.
+// Palette — extracted from the mockup
 const C = {
   bg: "#f8f7f4",
   grid: "rgba(0,0,0,0.035)",
@@ -17,17 +17,16 @@ const C = {
   bodyDn: "rgba(226,75,74,0.88)",
   wickUp: "rgba(29,158,117,0.5)",
   wickDn: "rgba(226,75,74,0.5)",
-  // Active pools — translucent so candles show through
+  // Active pools — translucent
   resAlive: "rgba(226,75,74,0.13)",
   resAliveBdr: "rgba(226,75,74,0.65)",
   supAlive: "rgba(29,158,117,0.13)",
   supAliveBdr: "rgba(29,158,117,0.65)",
-  // Taken pools — opaque so they mask the candles underneath
+  // Taken pools — opaque
   resDead: "rgba(226,75,74,0.55)",
   resDeadBdr: "rgba(226,75,74,0.95)",
   supDead: "rgba(29,158,117,0.55)",
   supDeadBdr: "rgba(29,158,117,0.95)",
-  level: "rgba(61,61,58,0.25)",
   nowLine: "rgba(61,61,58,0.45)",
 };
 
@@ -69,12 +68,10 @@ function drawScene(
   H: number,
   state: AnalysisStateClient,
 ): void {
-  // Padding — leaves room for the price axis on the left and time labels on the bottom
-  const pad = { l: 60, r: 16, t: 20, b: 32 };
+  const pad = { l: 60, r: 100, t: 20, b: 32 };
   const cw = W - pad.l - pad.r;
   const ch = H - pad.t - pad.b;
 
-  // Background
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
 
@@ -86,11 +83,14 @@ function drawScene(
     return;
   }
 
-  // Y axis: derive from candle high/low across all candles, with a small padding
-  const allPrices = state.candles.flatMap((c) => [c.high, c.low]);
+  // Y axis from candle range + extend to cover any off-screen level prices
+  const allPrices: number[] = state.candles.flatMap((c) => [c.high, c.low]);
+  for (const level of state.levels) {
+    if (!Number.isFinite(level.price)) continue;
+    allPrices.push(level.price);
+  }
   let minP = Math.min(...allPrices);
   let maxP = Math.max(...allPrices);
-  // Pad the Y range by 2% so candles don't sit on the edges
   const padPrice = (maxP - minP) * 0.02;
   minP -= padPrice;
   maxP += padPrice;
@@ -101,7 +101,7 @@ function drawScene(
   const halfWidth = Math.max(1, Math.floor(candleWidth / 2));
   const toX = (i: number): number => pad.l + ((i + 0.5) / N) * cw;
 
-  // Grid lines (5 horizontal divisions)
+  // Grid
   ctx.strokeStyle = C.grid;
   ctx.lineWidth = 0.5;
   for (let g = 0; g <= 5; g++) {
@@ -122,51 +122,54 @@ function drawScene(
     ctx.fillText(formatPrice(p), pad.l - 5, gy + 3.5);
   }
 
-  // ---- LEVELS (drawn first, behind everything) ----
-  // Side-coloured: red for resistance, green for support.
-  // Opacity and weight scale with strength so the eye reads importance directly.
-  for (const level of state.levels) {
-    if (level.graduatedToPoolId !== null) continue; // pools draw the rectangle themselves
+  // ---- LEVELS ----
+  // Sort weakest → strongest so strong levels draw on top
+  const sortedLevels = [...state.levels].sort(
+    (a, b) => strengthRank(a.strength) - strengthRank(b.strength),
+  );
+  for (const level of sortedLevels) {
+    if (level.graduatedToPoolId !== null) continue; // pools own the rectangle
     const y = toY(level.price);
     if (y < pad.t || y > pad.t + ch) continue;
     const opacity = levelOpacity(level.strength);
-    // 226,75,74 = the resistance red used for pools. 29,158,117 = support green.
-    const rgb =
-      level.side === "RESISTANCE" ? "226,75,74" : "29,158,117";
+    const rgb = level.side === "RESISTANCE" ? "226,75,74" : "29,158,117";
     ctx.strokeStyle = `rgba(${rgb},${opacity})`;
     ctx.lineWidth =
       level.strength === "very_strong"
-        ? 1.6
+        ? 2.2
         : level.strength === "strong"
-          ? 1.2
+          ? 1.6
           : level.strength === "medium"
-            ? 0.9
+            ? 1.1
             : level.strength === "weak"
-              ? 0.6
+              ? 0.7
               : 0.5;
-    const startX = toX(Math.max(0, level.swingCandleIndex));
+    const startX = toX(Math.max(0, Math.min(N - 1, level.swingCandleIndexOnPrimary)));
     ctx.beginPath();
     ctx.moveTo(startX, y);
     ctx.lineTo(pad.l + cw, y);
     ctx.stroke();
+
+    // Right-edge TF tag — shows which TFs confirm this level
+    // e.g. "W+D+4H" for a 3-TF confluent level
+    const tag = buildTfTag(level.sourceTimeframe, level.matchingTimeframes);
+    ctx.fillStyle = `rgba(${rgb},${Math.min(1, opacity + 0.25)})`;
+    ctx.font = `${level.strength === "very_strong" || level.strength === "strong" ? "500 " : ""}10px system-ui`;
+    ctx.textAlign = "left";
+    ctx.fillText(tag, pad.l + cw + 4, y + 3);
   }
-  // Reset stroke styling for what comes next
   ctx.lineWidth = 1;
 
-  // ---- POOLS ----
-  // Render active pools first (translucent, behind candles), then dead pools
-  // on top (opaque, so they visibly mask candles in their range).
-  // The opacity contrast IS the insight: scan the chart and you immediately
-  // see which pools were taken vs which are still alive.
+  // ---- ACTIVE POOLS (translucent, behind candles) ----
   const activePools = state.pools.filter((p) => p.status === "active");
   const deadPools = state.pools.filter((p) => p.status === "dead");
-
-  // Active first — drawn before candles in the apparent Z stack
   for (const pool of activePools) {
     const yTop = toY(pool.wickHigh);
     const yBot = toY(pool.wickLow);
-    const x1 = toX(Math.max(0, pool.birthCandleIndex));
-    const x2 = pad.l + cw; // active pools extend to "now"
+    const x1 = toX(
+      Math.max(0, Math.min(N - 1, pool.birthCandleIndexOnPrimary)),
+    );
+    const x2 = pad.l + cw;
     const fill = pool.type === "RESISTANCE" ? C.resAlive : C.supAlive;
     const border = pool.type === "RESISTANCE" ? C.resAliveBdr : C.supAliveBdr;
     ctx.fillStyle = fill;
@@ -177,9 +180,6 @@ function drawScene(
   }
 
   // ---- CANDLES ----
-  // (drawn between active and dead pools — dead pools come AFTER candles
-  // so they visibly mask the candles inside their range)
-
   for (let i = 0; i < N; i++) {
     const c = state.candles[i];
     const x = toX(i);
@@ -189,7 +189,6 @@ function drawScene(
     const yL = toY(c.low);
     const isUp = c.close >= c.open;
 
-    // Wick
     ctx.strokeStyle = isUp ? C.wickUp : C.wickDn;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -201,21 +200,22 @@ function drawScene(
     ctx.lineTo(x, yL);
     ctx.stroke();
 
-    // Body
     const bT = Math.min(yO, yC);
     const bH = Math.max(1.5, Math.abs(yC - yO));
     ctx.fillStyle = isUp ? C.bodyUp : C.bodyDn;
     ctx.fillRect(x - halfWidth, bT, halfWidth * 2, bH);
   }
 
-  // ---- DEAD POOLS — drawn on top of candles so the opacity masks the bars ----
+  // ---- DEAD POOLS (opaque, on top of candles) ----
   for (const pool of deadPools) {
     const yTop = toY(pool.wickHigh);
     const yBot = toY(pool.wickLow);
-    const x1 = toX(Math.max(0, pool.birthCandleIndex));
+    const x1 = toX(
+      Math.max(0, Math.min(N - 1, pool.birthCandleIndexOnPrimary)),
+    );
     const x2 =
-      pool.deathCandleIndex !== null
-        ? toX(pool.deathCandleIndex)
+      pool.deathCandleIndexOnPrimary !== null
+        ? toX(pool.deathCandleIndexOnPrimary)
         : pad.l + cw;
     const fill = pool.type === "RESISTANCE" ? C.resDead : C.supDead;
     const border = pool.type === "RESISTANCE" ? C.resDeadBdr : C.supDeadBdr;
@@ -231,12 +231,12 @@ function drawScene(
   ctx.lineWidth = 0.5;
   ctx.strokeRect(pad.l, pad.t, cw, ch);
 
-  // Header label — symbol + timeframe + candle count + computed time
+  // Header label
   ctx.fillStyle = C.txtP;
   ctx.font = "500 11px system-ui";
   ctx.textAlign = "left";
   ctx.fillText(
-    `${state.symbol} · ${state.timeframe} · ${state.candles.length} candles`,
+    `${state.symbol} · ${state.primaryTimeframe} · ${state.candles.length} candles · TFs: ${state.analysedTimeframes.join("/")}`,
     pad.l + 4,
     pad.t + 13,
   );
@@ -249,24 +249,33 @@ function formatPrice(p: number): string {
   return "$" + p.toFixed(4);
 }
 
-// Opacity scale per level strength tier. Five steps from visibly-grey
-// "trivial" up to dark "very_strong" levels. The previous scale started
-// at 0.10 which was below the perceptual threshold on the warm-white
-// background; trivial levels rendered as effectively invisible.
-function levelOpacity(
-  strength: AnalysisStateClient["levels"][number]["strength"],
-): number {
+function levelOpacity(strength: LevelStrengthClient): number {
   switch (strength) {
     case "very_strong":
-      return 0.85;
+      return 0.9;
     case "strong":
-      return 0.65;
+      return 0.7;
     case "medium":
       return 0.5;
     case "weak":
-      return 0.35;
+      return 0.3;
     case "trivial":
     default:
-      return 0.22;
+      return 0.15;
   }
+}
+
+function strengthRank(s: LevelStrengthClient): number {
+  const r = { trivial: 0, weak: 1, medium: 2, strong: 3, very_strong: 4 };
+  return r[s];
+}
+
+// Build a compact TF tag for the right-edge label.
+// E.g. sourceTimeframe="D" + matchingTimeframes=["W","4H"] → "4H+D+W"
+function buildTfTag(source: string, matching: string[]): string {
+  const all = new Set([source, ...matching]);
+  // Display in a consistent order: smallest to largest
+  const order = ["15m", "1H", "4H", "12H", "D", "W", "M"];
+  const sorted = order.filter((tf) => all.has(tf));
+  return sorted.join("+");
 }

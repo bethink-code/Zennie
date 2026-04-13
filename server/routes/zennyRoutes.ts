@@ -25,6 +25,8 @@ const VALID_TIMEFRAMES: ReadonlySet<Timeframe> = new Set([
   "4H",
   "12H",
   "D",
+  "W",
+  "M",
 ]);
 
 export function registerZennyRoutes(app: Express) {
@@ -54,8 +56,8 @@ export function registerZennyRoutes(app: Express) {
         const state = await runAnalysis({
           provider,
           symbol,
-          timeframe,
-          candleCount: count,
+          primaryTimeframe: timeframe,
+          candleCountPerTf: count,
         });
 
         res.json(state);

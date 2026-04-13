@@ -1,86 +1,71 @@
-// SetPoolBoundaries — compute pool wick_high / wick_low / centre_line.
-// Uses 90/10/50 percentile method (math §10.5) for outlier rejection.
-// Width clamped to 0.5%–1.5% of current price.
-// Pure.
-
-import type { Candle } from "../../../../../shared/zennyTypes";
-import { measureWickExtreme } from "../candle/measureWickExtreme";
-import { countTouches } from "../candle/countTouches";
+// setPoolBoundaries — compute pool rectangle bounds.
+//
+// Phase 2 refactor: ONE-SIDED rectangle. The pool sits on the "stops side"
+// of the line — ABOVE a resistance line (where shorts' stops cluster),
+// BELOW a support line (where longs' stops cluster). The rectangle's height
+// is the distance stops typically sit beyond the line (ATR × 1.0 default).
+//
+// Before: rectangle centered on line, height from percentile-of-wicks.
+// After:  rectangle one-sided, height from ATR × multiplier. Matches how
+// stops actually cluster and matches the user's method description:
+//   "Above every resistance line — sellers are sitting with their stop
+//    losses just above it. Below every support line — buyers are sitting
+//    with their stop losses just below it. Those are the liquidity pools."
+//
+// Pure function.
 
 export interface SetBoundariesInput {
-  candidatePrice: number;
+  linePrice: number; // the level price (close of swing candle)
   side: "RESISTANCE" | "SUPPORT";
-  candles: Candle[];
-  provisionalTolerancePct?: number; // 0.005
-  minWidthPct?: number; // 0.005 (0.5% of current price)
-  maxWidthPct?: number; // 0.015 (1.5%)
-  currentPrice: number;
+  atr: number; // ATR_14 value for the timeframe
+  offsetMultiplier?: number; // default 1.0 — how far the pool extends beyond the line
+  currentPrice: number; // for fallback min width clamp
+  minWidthPct?: number; // 0.005 (0.5% of current price) as a fallback
 }
 
 export interface PoolBoundaries {
   wickHigh: number;
   wickLow: number;
-  centreLine: number;
+  centreLine: number; // the line price — the "near edge" of the pool
   widthPct: number;
-  clampedToMin: boolean;
-  clampedToMax: boolean;
+  fallbackApplied: boolean;
 }
 
 export function setPoolBoundaries(input: SetBoundariesInput): PoolBoundaries {
-  const tolerancePct = input.provisionalTolerancePct ?? 0.005;
+  const offsetMult = input.offsetMultiplier ?? 1.0;
   const minWidthPct = input.minWidthPct ?? 0.005;
-  const maxWidthPct = input.maxWidthPct ?? 0.015;
 
-  // Find the candles that touched the level (used to derive boundaries)
-  const touches = countTouches({
-    candles: input.candles,
-    price: input.candidatePrice,
-    tolerancePct,
-    side: input.side,
-  });
-  const touchingCandles = touches.map((t) => input.candles[t.candleIndex]);
+  // Primary: offset by ATR × multiplier
+  let offset = input.atr * offsetMult;
 
-  if (touchingCandles.length === 0) {
-    // Fallback: use the candidate price ± minWidthPct
-    const halfWidth = (input.currentPrice * minWidthPct) / 2;
-    return {
-      wickHigh: input.candidatePrice + halfWidth,
-      wickLow: input.candidatePrice - halfWidth,
-      centreLine: input.candidatePrice,
-      widthPct: minWidthPct,
-      clampedToMin: true,
-      clampedToMax: false,
-    };
+  // Fallback: if ATR is zero or tiny (happens on very quiet periods or
+  // when the ATR input is missing), use minWidthPct of current price
+  const minOffset = input.currentPrice * minWidthPct;
+  let fallbackApplied = false;
+  if (offset < minOffset) {
+    offset = minOffset;
+    fallbackApplied = true;
   }
 
-  const raw = measureWickExtreme({
-    candles: touchingCandles,
-    side: input.side,
-  });
-
-  let wickHigh = raw.wickHigh;
-  let wickLow = raw.wickLow;
-  let centreLine = raw.centreLine;
-  let widthPct = (wickHigh - wickLow) / input.currentPrice;
-  let clampedToMin = false;
-  let clampedToMax = false;
-
-  if (widthPct < minWidthPct) {
-    // Expand symmetrically around the centre to reach minWidthPct
-    const targetWidth = input.currentPrice * minWidthPct;
-    const half = targetWidth / 2;
-    wickHigh = centreLine + half;
-    wickLow = centreLine - half;
-    widthPct = minWidthPct;
-    clampedToMin = true;
-  } else if (widthPct > maxWidthPct) {
-    const targetWidth = input.currentPrice * maxWidthPct;
-    const half = targetWidth / 2;
-    wickHigh = centreLine + half;
-    wickLow = centreLine - half;
-    widthPct = maxWidthPct;
-    clampedToMax = true;
+  let wickHigh: number;
+  let wickLow: number;
+  if (input.side === "RESISTANCE") {
+    // Pool extends ABOVE the line — where shorts' stops are
+    wickHigh = input.linePrice + offset;
+    wickLow = input.linePrice;
+  } else {
+    // Pool extends BELOW the line — where longs' stops are
+    wickHigh = input.linePrice;
+    wickLow = input.linePrice - offset;
   }
 
-  return { wickHigh, wickLow, centreLine, widthPct, clampedToMin, clampedToMax };
+  const widthPct = (wickHigh - wickLow) / input.currentPrice;
+
+  return {
+    wickHigh,
+    wickLow,
+    centreLine: input.linePrice, // the line itself is one edge of the pool
+    widthPct,
+    fallbackApplied,
+  };
 }

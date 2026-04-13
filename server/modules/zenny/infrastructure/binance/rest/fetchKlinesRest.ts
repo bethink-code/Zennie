@@ -14,6 +14,8 @@ const TIMEFRAME_TO_BINANCE: Record<Timeframe, string> = {
   "4H": "4h",
   "12H": "12h",
   D: "1d",
+  W: "1w",
+  M: "1M",
 };
 
 export interface FetchKlinesInput {

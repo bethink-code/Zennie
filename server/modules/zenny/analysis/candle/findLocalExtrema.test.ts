@@ -79,10 +79,10 @@ describe("findLocalExtrema", () => {
 
   // ─── Hybrid model: wick-detected, body-priced ───────────────────────
 
-  it("a tall-wick rejection candle IS a swing high (LuxAlgo / pivothigh semantics)", () => {
+  it("a tall-wick rejection candle IS a swing high, drawn at the CLOSE", () => {
     // Bearish rejection: candle 5 has open=$200, close=$150, high=$300 (tall wick).
-    // Other candles have lower wicks. Detection picks candle 5 because high=300
-    // is the max in window. The stored price is bodyTop = max(open, close) = 200.
+    // Detection picks candle 5 because high=300 is the max in window.
+    // Phase 2 rule: stored price = CLOSE of the swing candle = 150.
     const candles: Candle[] = [];
     for (let i = 0; i < 17; i++) {
       if (i === 5) {
@@ -96,15 +96,15 @@ describe("findLocalExtrema", () => {
     );
     expect(highs).toHaveLength(1);
     expect(highs[0].index).toBe(5);
-    // The line draws at the body top (200), not the wick high (300)
-    expect(highs[0].price).toBe(200);
+    // The line draws at the CLOSE (150), not the body top (200) or wick (300)
+    expect(highs[0].price).toBe(150);
     expect(highs[0].wickPrice).toBe(300);
   });
 
-  it("a hammer with long lower wick IS a swing low", () => {
+  it("a hammer with long lower wick IS a swing low, drawn at the CLOSE", () => {
     // Bullish hammer: open=$110, close=$115, low=$50 (long lower wick rejecting).
     // Detection finds it because low=50 is the min in window.
-    // Stored price is bodyBottom = min(open, close) = 110.
+    // Phase 2 rule: stored price = CLOSE = 115.
     const candles: Candle[] = [];
     for (let i = 0; i < 17; i++) {
       if (i === 5) {
@@ -118,7 +118,7 @@ describe("findLocalExtrema", () => {
     );
     expect(lows).toHaveLength(1);
     expect(lows[0].index).toBe(5);
-    expect(lows[0].price).toBe(110); // bodyBottom (open) — the committed price
+    expect(lows[0].price).toBe(115); // CLOSE — where the market settled after rejection
     expect(lows[0].wickPrice).toBe(50); // wick — the failed attempt
   });
 

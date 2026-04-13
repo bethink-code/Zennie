@@ -1,18 +1,8 @@
-// Client-side mirror of the AnalysisState shape returned from /api/zenny/braid-view-model.
-// Kept in sync with server/modules/zenny/analysis/orchestrator.ts AnalysisState.
+// Client-side mirror of the AnalysisState shape returned from
+// /api/zenny/braid-view-model. Kept in sync with
+// server/modules/zenny/analysis/orchestrator.ts.
 
 import type { Candle, Timeframe } from "@shared/zennyTypes";
-
-export interface ScoreBreakdownClient {
-  freshness: number;
-  departure: number;
-  depth: number;
-  volume: number;
-  liquidation: number;
-  timeframeConfluence: number;
-  touchQuality: number;
-  total: number;
-}
 
 export type LevelStrengthClient =
   | "trivial"
@@ -21,53 +11,55 @@ export type LevelStrengthClient =
   | "strong"
   | "very_strong";
 
+export type PoolStatusClient = "active" | "dead";
+export type PoolKindClient = "historical_respect" | "untaken_liquidity";
+export type DeathReasonClient =
+  | "engulfing"
+  | "sustained_break"
+  | "score_exhaustion";
+
 export interface AnalysisLevelClient {
   id: string;
-  price: number;
+  price: number; // close of the swing candle
+  wickPrice: number;
   side: "RESISTANCE" | "SUPPORT";
+  sourceTimeframe: Timeframe;
   swingCandleTime: number;
-  swingCandleIndex: number;
-  source: "extrema" | "tick" | "both";
-  touchCount: number;
+  swingCandleIndexOnPrimary: number;
+  matchingTimeframes: Timeframe[];
+  confluenceCount: number;
+  clusterMemberIds: string[];
+  recency: number;
   strength: LevelStrengthClient;
   graduatedToPoolId: string | null;
 }
 
-export type PoolStatusClient = "active" | "dead";
-export type DeathReasonClient = "engulfing" | "sustained_break" | "score_exhaustion";
-
 export interface AnalysisPoolClient {
   id: string;
   symbol: string;
-  timeframe: Timeframe;
+  sourceTimeframe: Timeframe;
   type: "RESISTANCE" | "SUPPORT";
+  kind: PoolKindClient;
+  linePrice: number;
   wickHigh: number;
   wickLow: number;
   centreLine: number;
   birthCandleTime: number;
-  birthCandleIndex: number;
+  birthCandleIndexOnPrimary: number;
   deathCandleTime: number | null;
-  deathCandleIndex: number | null;
+  deathCandleIndexOnPrimary: number | null;
   deathReason: DeathReasonClient | null;
   status: PoolStatusClient;
-  scoreBreakdown: ScoreBreakdownClient;
-  validationFailures: string[];
-}
-
-export interface AnalysisRejectedClient {
-  candidatePrice: number;
-  side: "RESISTANCE" | "SUPPORT";
-  failureReasons: string[];
-  scoreBreakdown: ScoreBreakdownClient | null;
-  reason: "validation_failed" | "score_below_threshold";
+  confluenceCount: number;
+  strength: LevelStrengthClient;
 }
 
 export interface AnalysisStateClient {
   symbol: string;
-  timeframe: Timeframe;
+  primaryTimeframe: Timeframe;
+  analysedTimeframes: Timeframe[];
   candles: Candle[];
   levels: AnalysisLevelClient[];
   pools: AnalysisPoolClient[];
-  rejectedCandidates: AnalysisRejectedClient[];
   computedAtMs: number;
 }
