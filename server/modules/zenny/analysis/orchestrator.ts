@@ -16,6 +16,9 @@ import {
 } from "../../../../shared/zennyTypes";
 import type { MarketDataProvider } from "../infrastructure/providers/providerInterface";
 import { getCandles } from "./data/getCandles";
+import { getOrderBookDepth } from "./data/getOrderBookDepth";
+import { aggregateDepthIntoBuckets } from "./orderbook/aggregateDepthIntoBuckets";
+import type { DepthSnapshot } from "./orderbook/types";
 import {
   findLocalExtrema,
   type SwingExtremum,
@@ -143,6 +146,11 @@ export interface AnalysisState {
   candles: Candle[]; // primary TF only (what the canvas renders)
   levels: AnalysisLevel[]; // all levels from all TFs, enriched with confluence
   pools: AnalysisPool[];
+  // Order book depth snapshot, binned across the primary TF's price
+  // range. SECOND self-standing model — independent of levels/pools,
+  // rendered side-by-side for visual cross-check only. Null when the
+  // depth fetch failed (analysis still proceeds with levels intact).
+  depth: DepthSnapshot | null;
   computedAtMs: number;
 }
 
@@ -169,9 +177,11 @@ export async function runAnalysis(
   const perSide = input.perSide ?? 2;
   const poolOffsetMult = input.poolOffsetAtrMultiplier ?? 1.0;
 
-  // 1. Fetch all timeframes in parallel. Each may return different amounts
-  //    of data (Monthly for BTCUSDT is limited to ~96 candles of history).
-  const fetchResults = await Promise.all(
+  // 1. Fetch all timeframes in parallel + depth snapshot in parallel.
+  //    Each TF may return different amounts of data (Monthly for BTCUSDT
+  //    is limited to ~96 candles of history). Depth is independent and
+  //    failure is non-fatal — analysis still produces levels + pools.
+  const candleFetchPromise = Promise.all(
     stack.map(async (tf) => {
       try {
         const candles = await getCandles(input.provider, {
@@ -189,6 +199,15 @@ export async function runAnalysis(
       }
     }),
   );
+  const depthFetchPromise = getOrderBookDepth(input.provider, {
+    symbol: input.symbol,
+    limit: 1000,
+  }).catch(() => null);
+
+  const [fetchResults, rawDepth] = await Promise.all([
+    candleFetchPromise,
+    depthFetchPromise,
+  ]);
 
   // 2. Per-TF: detect swings, filter by follow-through, select most recent.
   const perTfPivots = new Map<Timeframe, SwingExtremum[]>();
@@ -236,6 +255,7 @@ export async function runAnalysis(
       candles: [],
       levels: [],
       pools: [],
+      depth: null,
       computedAtMs: Date.now(),
     };
   }
@@ -451,6 +471,27 @@ export async function runAnalysis(
     }
   }
 
+  // Aggregate the depth snapshot against the primary TF's price range
+  // (with a 5% pad on each side so walls just outside the visible
+  // candles still show up). Failed fetch → depth: null, analysis still
+  // returns levels and pools intact.
+  let depthSnapshot: DepthSnapshot | null = null;
+  if (rawDepth !== null) {
+    let priceLow = primaryCandles[0].low;
+    let priceHigh = primaryCandles[0].high;
+    for (const c of primaryCandles) {
+      if (c.low < priceLow) priceLow = c.low;
+      if (c.high > priceHigh) priceHigh = c.high;
+    }
+    const pad = (priceHigh - priceLow) * 0.05;
+    depthSnapshot = aggregateDepthIntoBuckets({
+      raw: rawDepth,
+      priceLow: priceLow - pad,
+      priceHigh: priceHigh + pad,
+      bucketCount: 80,
+    });
+  }
+
   return {
     symbol: input.symbol,
     primaryTimeframe: input.primaryTimeframe,
@@ -458,6 +499,7 @@ export async function runAnalysis(
     candles: primaryCandles,
     levels: flatLevels,
     pools: mergedPools,
+    depth: depthSnapshot,
     computedAtMs: Date.now(),
   };
 }

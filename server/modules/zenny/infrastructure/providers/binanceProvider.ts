@@ -5,9 +5,15 @@
 // Cache strategy: try cache first; on miss, fetch from Binance REST and write back.
 
 import type { Candle, Timeframe } from "../../../../../shared/zennyTypes";
-import type { MarketDataProvider, CandleQuery } from "./providerInterface";
+import type {
+  MarketDataProvider,
+  CandleQuery,
+  OrderBookDepthQuery,
+} from "./providerInterface";
+import type { RawOrderBookDepth } from "../../analysis/orderbook/types";
 import { CandleCache } from "../cache/candleCache";
 import { fetchKlinesRest } from "../binance/rest/fetchKlinesRest";
+import { fetchDepthRest } from "../binance/rest/fetchDepthRest";
 import type { TokenBucketState } from "../rateLimiter/types";
 import { createTokenBucket } from "../rateLimiter/createTokenBucket";
 import type { BreakerState } from "../circuitBreaker/types";
@@ -60,6 +66,17 @@ export class BinanceProvider implements MarketDataProvider {
         }
       },
     };
+  }
+
+  async getOrderBookDepth(
+    query: OrderBookDepthQuery,
+  ): Promise<RawOrderBookDepth> {
+    // No caching — depth is realtime; stale is worse than no snapshot.
+    // Each Braid refresh triggers exactly one fetch.
+    return fetchDepthRest(
+      { symbol: query.symbol, limit: query.limit ?? 1000 },
+      this.restDeps,
+    );
   }
 
   async getCandles(query: CandleQuery): Promise<Candle[]> {

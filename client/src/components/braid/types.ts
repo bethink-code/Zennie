@@ -58,6 +58,24 @@ export interface AnalysisPoolClient {
   strength: LevelStrengthClient;
 }
 
+export interface DepthBucketClient {
+  priceLow: number;
+  priceHigh: number;
+  bidSizeUsd: number;
+  askSizeUsd: number;
+  totalSizeUsd: number;
+}
+
+export interface DepthSnapshotClient {
+  symbol: string;
+  fetchedAtMs: number;
+  midPrice: number;
+  priceLow: number;
+  priceHigh: number;
+  buckets: DepthBucketClient[];
+  maxBucketSizeUsd: number;
+}
+
 export interface AnalysisStateClient {
   symbol: string;
   primaryTimeframe: Timeframe;
@@ -65,5 +83,6 @@ export interface AnalysisStateClient {
   candles: Candle[];
   levels: AnalysisLevelClient[];
   pools: AnalysisPoolClient[];
+  depth: DepthSnapshotClient | null;
   computedAtMs: number;
 }
