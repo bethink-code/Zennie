@@ -76,6 +76,18 @@ export const DEFAULT_INFRASTRUCTURE_CONFIG: InfrastructureConfig = {
   activeProvider: "binance",
 };
 
+// Raw depth snapshot from Binance /fapi/v1/depth.
+// Each entry is [price, quantity]. Bids descend from best bid;
+// asks ascend from best ask. Lives in infrastructure/ because it's the
+// wire format from the API — analysis layers can opt in but don't own it.
+export interface RawOrderBookDepth {
+  symbol: string;
+  lastUpdateId: number;
+  fetchedAtMs: number;
+  bids: Array<[number, number]>;
+  asks: Array<[number, number]>;
+}
+
 export interface ApiCallRecord {
   endpoint: string;
   method: string;

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+* { box-sizing:border-box; margin:0; padding:0; font-family:system-ui,sans-serif; }
+body { background:#f8f7f4; color:#3d3d3a; padding:16px; }
+.tf-row { display:flex; align-items:stretch; gap:0; margin-bottom:2px; border-radius:8px; overflow:hidden; }
+.tf-label { min-width:52px; padding:10px 10px; font-size:12px; font-weight:500; display:flex; align-items:center; background:#f1efe8; color:#73726c; border-radius:8px 0 0 8px; flex-shrink:0; }
+.tf-track { flex:1; position:relative; height:48px; background:#fff; border:0.5px solid rgba(0,0,0,0.07); }
+.zone-band { position:absolute; left:0; right:0; display:flex; align-items:center; }
+.zone-line { position:absolute; left:0; right:0; height:1.5px; }
+.zone-label { position:absolute; right:6px; font-size:9px; font-weight:500; white-space:nowrap; }
+.tf-now { position:absolute; top:0; bottom:0; width:1.5px; background:rgba(61,61,58,0.35); z-index:5; }
+.convergence-box { background:#fff; border:0.5px solid rgba(0,0,0,0.10); border-radius:12px; padding:14px 16px; margin-top:14px; }
+.conv-title { font-size:13px; font-weight:500; margin-bottom:10px; }
+.conv-level { display:flex; align-items:center; gap:10px; margin-bottom:8px; padding:8px 10px; border-radius:8px; background:#f8f7f4; }
+.conv-price { font-size:13px; font-weight:500; min-width:64px; }
+.conv-tfs { display:flex; gap:5px; flex-wrap:wrap; }
+.tf-tag { font-size:10px; padding:2px 7px; border-radius:10px; font-weight:500; }
+.conv-score { margin-left:auto; font-size:12px; font-weight:500; }
+.legend-row { display:flex; gap:14px; margin-bottom:12px; flex-wrap:wrap; font-size:11px; color:#73726c; align-items:center; }
+.li { display:flex; align-items:center; gap:5px; }
+.lsq { width:14px; height:5px; border-radius:2px; }
+canvas { display:block; width:100%; border-radius:8px; margin-bottom:14px; }
+</style>
+</head>
+<body>
+
+<div class="legend-row">
+  <div class="li"><div class="lsq" style="background:rgba(226,75,74,0.5)"></div>Resistance</div>
+  <div class="li"><div class="lsq" style="background:rgba(29,158,117,0.5)"></div>Support</div>
+  <div class="li"><div class="lsq" style="background:rgba(239,159,39,0.5)"></div>Converging zone</div>
+  <div class="li" style="margin-left:auto;font-size:11px;color:#888780">Thicker line = more timeframes agree</div>
+</div>
+
+<canvas id="stack" height="320" role="img" aria-label="Timeframe stack showing zone alignment across 15m 1H 4H Daily"></canvas>
+
+<div class="convergence-box">
+  <div class="conv-title">Zone convergence — where timeframes agree</div>
+
+  <div class="conv-level">
+    <span class="conv-price" style="color:#A32D2D">$64.8K</span>
+    <div class="conv-tfs">
+      <span class="tf-tag" style="background:rgba(226,75,74,0.12);color:#A32D2D">15m</span>
+      <span class="tf-tag" style="background:rgba(226,75,74,0.18);color:#A32D2D">1H</span>
+      <span class="tf-tag" style="background:rgba(226,75,74,0.24);color:#A32D2D">4H</span>
+      <span class="tf-tag" style="background:rgba(226,75,74,0.32);color:#A32D2D">Daily</span>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(239,159,39,0.12);color:#633806;font-weight:500">Max convergence</span>
+      <span class="conv-score" style="color:#1D9E75">+10 pts</span>
+    </div>
+  </div>
+
+  <div class="conv-level">
+    <span class="conv-price" style="color:#085041">$61.3K</span>
+    <div class="conv-tfs">
+      <span class="tf-tag" style="background:rgba(29,158,117,0.12);color:#085041">15m</span>
+      <span class="tf-tag" style="background:rgba(29,158,117,0.18);color:#085041">1H</span>
+      <span class="tf-tag" style="background:rgba(29,158,117,0.24);color:#085041">4H</span>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(61,61,58,0.08);color:#5F5E5A;font-weight:500">3 timeframes</span>
+      <span class="conv-score" style="color:#1D9E75">+7 pts</span>
+    </div>
+  </div>
+
+  <div class="conv-level" style="opacity:0.6">
+    <span class="conv-price" style="color:#73726c">$63.1K</span>
+    <div class="conv-tfs">
+      <span class="tf-tag" style="background:rgba(61,61,58,0.08);color:#73726c">15m</span>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(61,61,58,0.06);color:#888780;font-weight:500">1 timeframe only</span>
+      <span class="conv-score" style="color:#888780">+3 pts</span>
+    </div>
+  </div>
+
+  <div style="font-size:11px;color:#888780;margin-top:10px;padding-top:10px;border-top:0.5px solid rgba(0,0,0,0.08)">
+    Rule: Zone must appear on the trading TF minimum. Each additional TF adds conviction score. Daily zone = always significant regardless of other scores.
+  </div>
+</div>
+
+<script>
+const isDark=false;
+const C={
+  bg:'#f8f7f4', grid:'rgba(0,0,0,0.04)',
+  txt:'#888780', txtP:'#3d3d3a',
+  res:'rgba(226,75,74,0.14)', resBorder:'rgba(226,75,74,0.6)',
+  sup:'rgba(29,158,117,0.14)', supBorder:'rgba(29,158,117,0.6)',
+  conv:'rgba(239,159,39,0.22)', convBorder:'rgba(239,159,39,0.8)',
+  wire:'rgba(61,61,58,0.75)', now:'rgba(61,61,58,0.4)',
+};
+
+function rng(seed){ let s=seed; return ()=>{ s=(s*16807)%2147483647; return (s-1)/2147483646; }; }
+function smooth(arr){ return arr.map((v,i)=>i===0||i===arr.length-1?v:(arr[i-1]+v+arr[i+1])/3); }
+
+function genWire(seed,n,start,vol,trend){
+  const r=rng(seed); let p=start; const pts=[p];
+  for(let i=1;i<n;i++){ p+=(r()-0.46)*vol+trend; p=Math.max(0.05,Math.min(0.95,p)); pts.push(p); }
+  return smooth(smooth(pts));
+}
+
+function draw(){
+  const cv=document.getElementById('stack');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.parentElement.clientWidth;
+  const H=parseInt(cv.getAttribute('height'));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');
+  ctx.scale(dpr,dpr);
+
+  const TFS=['15m','1H','4H','Daily'];
+  const rowH=ch=>ch/TFS.length;
+  const pad={l:44,r:16,t:16,b:28};
+  const cw=W-pad.l-pad.r;
+  const ch=H-pad.t-pad.b;
+  const rh=ch/TFS.length;
+  const NOW_FRAC=0.65;
+  const nowX=pad.l+NOW_FRAC*cw;
+
+  // Price range
+  const PMIN=59500,PMAX=66500,PRANGE=PMAX-PMIN;
+  const toY=(p,rowIdx)=>pad.t+rowIdx*rh+rh-((p-PMIN)/PRANGE)*rh;
+
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+
+  // Zones per TF — which zones are visible at each timeframe
+  const zonesByTF=[
+    // 15m — sees all zones
+    [{p:64800,type:'res',rich:0.9,conv:true},{p:63100,type:'res',rich:0.4},{p:62300,type:'sup',rich:0.55},{p:61300,type:'sup',rich:0.84,conv:true}],
+    // 1H
+    [{p:64800,type:'res',rich:0.9,conv:true},{p:62300,type:'sup',rich:0.55},{p:61300,type:'sup',rich:0.84,conv:true}],
+    // 4H
+    [{p:64800,type:'res',rich:0.9,conv:true},{p:61300,type:'sup',rich:0.84,conv:true},{p:59800,type:'sup',rich:0.6}],
+    // Daily
+    [{p:64800,type:'res',rich:0.9,conv:true},{p:61300,type:'sup',rich:0.7,conv:true},{p:59800,type:'sup',rich:0.55}],
+  ];
+
+  // Wires per TF — different zoom level means different price path character
+  const wireSeeds=[42,77,13,99];
+  const wireVols=[0.06,0.05,0.04,0.03];
+  const wireTrends=[0.002,0.0018,0.0015,0.001];
+
+  TFS.forEach((tf,ri)=>{
+    const y0=pad.t+ri*rh;
+    const y1=pad.t+(ri+1)*rh;
+
+    // Row background
+    ctx.fillStyle=ri%2===0?'rgba(0,0,0,0.01)':'rgba(0,0,0,0.0)';
+    ctx.fillRect(pad.l,y0,cw,rh);
+
+    // TF label
+    ctx.fillStyle='#888780'; ctx.font=`500 11px system-ui`; ctx.textAlign='right';
+    ctx.fillText(tf,pad.l-5,y0+rh*0.5+4);
+
+    // Zone bands for this TF
+    for(const z of zonesByTF[ri]){
+      const yC=toY(z.p,ri);
+      const bandPx=(z.rich*200/PRANGE)*rh*12;
+      const isConv=z.conv;
+      ctx.fillStyle=isConv?C.conv:(z.type==='res'?C.res:C.sup);
+      ctx.fillRect(pad.l,yC-bandPx/2,cw,bandPx);
+      ctx.strokeStyle=isConv?C.convBorder:(z.type==='res'?C.resBorder:C.supBorder);
+      ctx.lineWidth=isConv?2:z.rich*1.2; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(pad.l,yC); ctx.lineTo(pad.l+cw,yC); ctx.stroke();
+      // Label on right
+      ctx.fillStyle=isConv?'#854F0B':(z.type==='res'?'rgba(162,45,45,0.8)':'rgba(15,110,86,0.8)');
+      ctx.font=`${isConv?'500':'400'} 9px system-ui`; ctx.textAlign='right';
+      if(ri===0) ctx.fillText('$'+Math.round(z.p/100)/10+'K',pad.l+cw+14,yC+3);
+    }
+
+    // Wire for this TF
+    const wire=genWire(wireSeeds[ri],80,0.35,wireVols[ri],wireTrends[ri]);
+    const toXw=i=>pad.l+(i/79)*NOW_FRAC*cw;
+    ctx.beginPath(); ctx.strokeStyle=C.wire; ctx.lineWidth=1.5; ctx.lineJoin='round';
+    wire.forEach((v,i)=>{
+      const x=toXw(i);
+      const y=pad.t+ri*rh+rh-v*rh;
+      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    // Row separator
+    if(ri<TFS.length-1){
+      ctx.strokeStyle='rgba(0,0,0,0.06)'; ctx.lineWidth=0.5;
+      ctx.beginPath(); ctx.moveTo(pad.l,y1); ctx.lineTo(pad.l+cw,y1); ctx.stroke();
+    }
+
+    // Now line per row
+    ctx.strokeStyle=C.now; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(nowX,y0+2); ctx.lineTo(nowX,y1-2); ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  // Outer border
+  ctx.strokeStyle='rgba(0,0,0,0.06)'; ctx.lineWidth=0.5;
+  ctx.strokeRect(pad.l,pad.t,cw,ch);
+
+  // Now label
+  ctx.fillStyle='#888780'; ctx.font=`11px system-ui`; ctx.textAlign='center';
+  ctx.fillText('now',nowX,H-8);
+
+  // Convergence vertical highlight at $64.8K — spans all rows
+  // Show as a vertical amber band connecting all 4 rows at that price
+  for(let ri=0;ri<TFS.length;ri++){
+    const yC=toY(64800,ri);
+    ctx.fillStyle='rgba(239,159,39,0.06)';
+    ctx.fillRect(pad.l,pad.t+ri*rh,cw,rh*0.5);
+  }
+}
+draw();
+window.addEventListener('resize',draw);
+</script>
+</body>
+</html>

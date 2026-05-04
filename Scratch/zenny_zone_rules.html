@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+* { box-sizing: border-box; margin:0; padding:0; font-family: system-ui, sans-serif; }
+body { background:#f8f7f4; color:#3d3d3a; padding:16px; }
+.rule-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px; }
+@media(max-width:500px){ .rule-grid{grid-template-columns:1fr;} }
+.rule-card { background:#fff; border:0.5px solid rgba(0,0,0,0.12); border-radius:12px; padding:12px 14px; }
+.rule-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.rule-name { font-size:13px; font-weight:500; }
+.rule-weight { font-size:11px; font-weight:500; padding:2px 8px; border-radius:10px; }
+.rule-desc { font-size:12px; color:#73726c; line-height:1.6; margin-bottom:8px; }
+.rule-threshold { font-size:11px; font-family:monospace; color:#888780; background:#f1efe8; padding:4px 8px; border-radius:6px; display:inline-block; }
+.score-section { background:#f1efe8; border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+.score-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.score-label { font-size:12px; color:#73726c; min-width:160px; }
+.score-bar-wrap { flex:1; height:8px; background:#fff; border-radius:4px; overflow:hidden; border:0.5px solid rgba(0,0,0,0.08); }
+.score-bar { height:100%; border-radius:4px; transition:width .4s; }
+.score-val { font-size:12px; font-weight:500; min-width:36px; text-align:right; }
+.total-row { display:flex; align-items:center; justify-content:space-between; padding-top:10px; border-top:0.5px solid rgba(0,0,0,0.1); margin-top:4px; }
+.total-label { font-size:13px; font-weight:500; }
+.total-score { font-size:22px; font-weight:500; }
+.verdict { font-size:12px; padding:3px 10px; border-radius:10px; font-weight:500; }
+.example-toggle { display:flex; gap:8px; margin-bottom:12px; }
+.eg-btn { padding:5px 12px; border-radius:8px; border:0.5px solid rgba(0,0,0,0.15); background:#f1efe8; font-size:12px; cursor:pointer; color:#73726c; }
+.eg-btn.active { background:#fff; border-color:rgba(0,0,0,0.3); color:#3d3d3a; font-weight:500; }
+.min-note { font-size:11px; color:#888780; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<div class="example-toggle">
+  <button class="eg-btn active" onclick="setExample('rich')">Rich zone — $64.8K</button>
+  <button class="eg-btn" onclick="setExample('medium')">Medium zone — $62.3K</button>
+  <button class="eg-btn" onclick="setExample('thin')">Thin zone — rejected</button>
+</div>
+
+<div class="rule-grid">
+  <div class="rule-card">
+    <div class="rule-header">
+      <span class="rule-name">1. Order book depth</span>
+      <span class="rule-weight" style="background:rgba(127,119,221,0.12);color:#534AB7">25 pts</span>
+    </div>
+    <div class="rule-desc">Live bid/ask stack from Binance depth API. Minimum cumulative order volume within ±0.5% of the level. Thin books fail immediately.</div>
+    <div class="rule-threshold">min: 500 BTC within ±0.5%</div>
+  </div>
+
+  <div class="rule-card">
+    <div class="rule-header">
+      <span class="rule-name">2. Wick cluster</span>
+      <span class="rule-weight" style="background:rgba(226,75,74,0.12);color:#A32D2D">25 pts</span>
+    </div>
+    <div class="rule-desc">Minimum number of candle wicks touching or piercing the level across the lookback window. Wicks are the visual truth — zones without wick history are suspect.</div>
+    <div class="rule-threshold">min: 3 wicks within band on current TF</div>
+  </div>
+
+  <div class="rule-card">
+    <div class="rule-header">
+      <span class="rule-name">3. Historical volume at price</span>
+      <span class="rule-weight" style="background:rgba(29,158,117,0.12);color:#085041">20 pts</span>
+    </div>
+    <div class="rule-desc">Volume Profile — how much has actually traded at this level historically. High volume = institutional activity = real zone. Low volume = vacuum = price blows through.</div>
+    <div class="rule-threshold">min: top 20% of volume profile</div>
+  </div>
+
+  <div class="rule-card">
+    <div class="rule-header">
+      <span class="rule-name">4. Liquidation cluster</span>
+      <span class="rule-weight" style="background:rgba(239,159,39,0.12);color:#633806">20 pts</span>
+    </div>
+    <div class="rule-desc">Coinglass heatmap overlay. Forced liquidations create mechanical, unavoidable order flow. A level with a liquidation cluster is a guaranteed magnet regardless of other factors.</div>
+    <div class="rule-threshold">present within ±1% = full score</div>
+  </div>
+
+  <div class="rule-card" style="grid-column:1/-1">
+    <div class="rule-header">
+      <span class="rule-name">5. Timeframe confluence</span>
+      <span class="rule-weight" style="background:rgba(61,61,58,0.10);color:#5F5E5A">10 pts</span>
+    </div>
+    <div class="rule-desc">Does this zone appear on more than one timeframe? A level visible on both the 1H and the 4H scores higher than one only visible on the 15m. Confluence multiplies conviction.</div>
+    <div class="rule-threshold">1 TF = 3pts · 2 TF = 7pts · 3+ TF = 10pts</div>
+  </div>
+</div>
+
+<div class="score-section">
+  <div class="score-row">
+    <span class="score-label">Order book depth</span>
+    <div class="score-bar-wrap"><div class="score-bar" id="sb-0" style="background:#7F77DD;width:0%"></div></div>
+    <span class="score-val" id="sv-0">—</span>
+  </div>
+  <div class="score-row">
+    <span class="score-label">Wick cluster</span>
+    <div class="score-bar-wrap"><div class="score-bar" id="sb-1" style="background:#E24B4A;width:0%"></div></div>
+    <span class="score-val" id="sv-1">—</span>
+  </div>
+  <div class="score-row">
+    <span class="score-label">Historical volume</span>
+    <div class="score-bar-wrap"><div class="score-bar" id="sb-2" style="background:#1D9E75;width:0%"></div></div>
+    <span class="score-val" id="sv-2">—</span>
+  </div>
+  <div class="score-row">
+    <span class="score-label">Liquidation cluster</span>
+    <div class="score-bar-wrap"><div class="score-bar" id="sb-3" style="background:#EF9F27;width:0%"></div></div>
+    <span class="score-val" id="sv-3">—</span>
+  </div>
+  <div class="score-row">
+    <span class="score-label">Timeframe confluence</span>
+    <div class="score-bar-wrap"><div class="score-bar" id="sb-4" style="background:#888780;width:0%"></div></div>
+    <span class="score-val" id="sv-4">—</span>
+  </div>
+  <div class="total-row">
+    <span class="total-label">Zone score</span>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="verdict" id="verdict">—</span>
+      <span class="total-score" id="total-score">—</span>
+      <span style="font-size:13px;color:#888780">/100</span>
+    </div>
+  </div>
+  <div class="min-note" id="min-note">Minimum score to declare a valid zone: 60/100. Below this — no zone, no trade.</div>
+</div>
+
+<script>
+const EXAMPLES={
+  rich:{scores:[23,22,18,20,9],notes:['1,240 BTC in book','6 wicks on 1H','Top 8% vol profile','Strong cluster present','Visible on 1H + 4H + Daily']},
+  medium:{scores:[14,15,12,0,7],notes:['580 BTC in book','4 wicks on 1H','Top 22% vol profile','No cluster','Visible on 1H + 4H']},
+  thin:{scores:[6,8,7,0,3],notes:['190 BTC below min','2 wicks below min','Low volume area','No cluster','15m only']},
+};
+const maxPts=[25,25,20,20,10];
+function setExample(key){
+  const ex=EXAMPLES[key];
+  document.querySelectorAll('.eg-btn').forEach((b,i)=>b.classList.toggle('active',['rich','medium','thin'][i]===key));
+  const total=ex.scores.reduce((a,b)=>a+b,0);
+  ex.scores.forEach((s,i)=>{
+    document.getElementById('sb-'+i).style.width=(s/maxPts[i]*100)+'%';
+    document.getElementById('sv-'+i).textContent=s+'/'+maxPts[i];
+  });
+  document.getElementById('total-score').textContent=total;
+  const tv=document.getElementById('verdict');
+  const mn=document.getElementById('min-note');
+  if(total>=75){tv.textContent='Rich pool';tv.style.background='rgba(29,158,117,0.12)';tv.style.color='#085041';mn.textContent='Score '+total+'/100 — active zone declared. Bold arm on the Braid.';}
+  else if(total>=60){tv.textContent='Valid zone';tv.style.background='rgba(239,159,39,0.12)';tv.style.color='#633806';mn.textContent='Score '+total+'/100 — zone declared. Standard weight on the Braid.';}
+  else{tv.textContent='Rejected';tv.style.background='rgba(226,75,74,0.12)';tv.style.color='#A32D2D';mn.textContent='Score '+total+'/100 — below 60. No zone. No trade.';}
+}
+setExample('rich');
+</script>
+</body>
+</html>

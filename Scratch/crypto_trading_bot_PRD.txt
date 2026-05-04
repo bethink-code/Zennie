@@ -1,0 +1,1252 @@
+PRODUCT REQUIREMENTS DOCUMENT
+
+Crypto Liquidity Trading Bot
+
+with Visual Execution Interface
+
+Version           0.1 -- Initial Draft
+Date              April 2026
+Status            For Developer Review
+Product Type      Multi-tenant SaaS trading platform
+Market            Crypto -- BTC/USDT, ETH/USDT (Phase 1)
+Exchange Target   Binance / Bybit (TBD by developer)
+Auth              Google OAuth -- invite-only registration
+Primary Language  TBD by developer
+
+Table of Contents
+
+   Table of Contents ....................................................................................................................1
+1. Product Overview....................................................................................................................3
+
+      1.1 Problem Statement ........................................................................................................3
+      1.2 Solution..........................................................................................................................4
+      1.3 Scope -- Phase 1 ..........................................................................................................4
+      1.4 Out of Scope -- Phase 1................................................................................................4
+2. Guiding Principles ...................................................................................................................5
+3. Engagement Model and Operator Wellbeing ...........................................................................5
+      3.1 The Weekly Rhythm.......................................................................................................6
+      3.2 The On/Off Switch..........................................................................................................6
+      3.3 Notification Design -- Tiered Alert Model.......................................................................6
+      3.4 Urgent Alert Triggers......................................................................................................7
+      3.5 WhatsApp Business API Implementation .......................................................................7
+4. System Architecture ................................................................................................................8
+
+      4.1 Layer 0 -- Regime Engine .............................................................................................8
+      Known Regime Profiles........................................................................................................8
+      Regime Selection -- Phase 1 ..............................................................................................9
+      Regime Detection -- Phase 2 ............................................................................................10
+      Extensibility Requirement...................................................................................................10
+      4.2 Layer 1 -- Risk Manager..............................................................................................10
+      4.3 Layer 2 -- Temporal Filter............................................................................................10
+      4.4 Layer 3 -- Strategy Engine ..........................................................................................10
+      4.5 Layer 4 -- Visual Interface ...........................................................................................11
+5. Strategy Engine Requirements..............................................................................................11
+      4.1 Core Concept...............................................................................................................11
+      4.2 Level Identification Requirements ................................................................................11
+      4.3 Entry Requirements .....................................................................................................12
+      4.4 Exit Requirements........................................................................................................12
+6. Visual Interface Requirements ..............................................................................................12
+      5.1 Design Principles .........................................................................................................12
+      5.2 Primary Chart Panel.....................................................................................................12
+      5.3 Risk Dashboard Panel .................................................................................................13
+      5.4 Active Trades Panel .....................................................................................................13
+      5.5 Level Map Panel ..........................................................................................................13
+      5.6 Regime Control Panel ..................................................................................................13
+      5.7 Temporal Context Panel ..............................................................................................14
+      5.8 Trade Log Panel ..........................................................................................................14
+      5.9 Configuration Panel......................................................................................................14
+7. Risk Management Requirements ..........................................................................................15
+      7.1 Position Direction and Leverage Policy ........................................................................15
+      7.2 Emergency Market Exit ................................................................................................15
+      7.3 Futures -- Phase 3 Safeguards ...................................................................................16
+      7.4 Risk Requirements Table .............................................................................................16
+8. Data Requirements ...............................................................................................................17
+      7.1 Market Data .................................................................................................................17
+      7.2 External Data ...............................................................................................................18
+      7.3 Internal Data ................................................................................................................18
+9. Phased Delivery ....................................................................................................................18
+10. Success Criteria ..................................................................................................................18
+11. Backtest Sundays -- Phase 3 Specification ........................................................................19
+
+      11.1 How It Works..............................................................................................................19
+      11.2 The Sunday Session ..................................................................................................20
+      11.3 Safety Constraints on the Agent.................................................................................20
+      11.4 Architectural Prerequisites -- Build From Phase 0 .....................................................20
+12. Multi-Tenancy and Platform Architecture.............................................................................21
+      12.1 Tenant Model .............................................................................................................21
+      12.2 Authentication and Access Control.............................................................................22
+      12.3 Exchange API Key Management................................................................................22
+      12.4 Tenant Isolation Requirements...................................................................................22
+      12.5 Admin Oversight Dashboard ......................................................................................23
+      12.6 Usage Metering and Billing ........................................................................................23
+      12.7 Architectural Prerequisites for Multi-Tenancy .............................................................24
+13. Market Registry and Pair Management ...............................................................................24
+      13.1 Market Registry -- Admin CRUD ...............................................................................24
+      13.2 Per-Pair Metadata ......................................................................................................25
+      13.3 Tenant Pair Selection .................................................................................................26
+      13.4 Exchange Compatibility..............................................................................................26
+      13.5 Audit and History........................................................................................................26
+14. Open Questions for Developer ............................................................................................26
+
+1. Product Overview
+
+This document defines the requirements for a multi-tenant cryptocurrency trading platform. The
+platform hosts a bot instance for each invited user, executing a centrally maintained liquidity
+sweep strategy against each user's own exchange account. The platform operator -- the admin
+-- maintains the strategy logic and has oversight across all instances. Users manage their own
+risk configuration, exchange API keys, and regime settings.
+
+PLATFORM  The strategy engine is a shared, centrally maintained asset. Risk
+  MODEL   configuration, capital, and exchange connectivity are per-tenant. One
+          codebase. Many isolated instances. The admin improves the strategy for
+          everyone; users own their own risk.
+
+1.1 Problem Statement
+The trader has an established understanding of crypto market structure, specifically liquidity
+sweep mechanics and temporal patterns. Manual trading has historically been undermined by:
+
+    · Oversized position sizing -- entering trades at multiples of an acceptable risk level
+    · Emotional execution -- hesitating on entries, moving stops, holding losers
+    · Reaction latency -- missing reversal entries after a liquidity sweep confirmation
+    · Inconsistent application of known patterns across sessions and days
+
+1.2 Solution
+A multi-tenant platform where each user runs their own isolated bot instance executing a
+centrally maintained strategy. The admin controls the mechanics; users control their risk. A rich
+visual interface gives each user situational awareness of their own instance without requiring
+manual intervention. The Backtest Sundays agent improves the strategy over time and bills
+model usage per tenant.
+
+1.3 Scope -- Phase 1
+    · Single exchange, single trading pair per tenant (BTC/USDT or ETH/USDT)
+    · Long and short positions -- no leverage
+    · Liquidity sweep / reversal strategy -- centrally maintained, all tenants run the same
+         version
+    · Per-tenant risk configuration -- each user sets their own risk %, drawdown limits, and
+         regime
+    · Per-tenant exchange API key management -- users connect their own exchange
+         accounts
+    · Google OAuth authentication -- invite-only registration flow
+    · Admin oversight dashboard -- all instances visible to admin only
+    · Full risk management layer with hard limits per tenant
+    · Emergency market exit -- immediate at-market close of all positions
+    · Temporal session and day-of-week filters
+    · Visual dashboard -- tenant view and admin view
+    · WhatsApp Business API notifications -- tiered alert model via Bethink account
+    · Paper trading / testnet validation before live deployment
+
+1.4 Out of Scope -- Phase 1
+    · Self-signup -- all users are invited by admin
+    · Leverage of any kind
+    · Futures contracts -- architected for Phase 3
+    · Multi-exchange arbitrage
+    · Machine learning or predictive modelling
+    · Equities, forex, or non-crypto markets
+    · Mobile application
+· Social or copy trading features
+
+· Billing infrastructure -- usage metering tracked in Phase 1; payment processing is
+    Phase 2
+
+2. Guiding Principles
+
+These principles are non-negotiable and must be reflected in every architectural and design
+decision.
+
+RULE 1  Risk management is immutable. No parameter in the risk layer can be
+        overridden by the strategy layer, the UI, or any runtime condition. Capital
+        preservation is the first objective.
+
+RULE 2  Start small. The system must be designed for a small initial allocation that the
+        trader is comfortable losing entirely. Scalability is a Phase 2 concern.
+
+RULE 3  Trading capital is separate from holdings. The bot operates on a dedicated sub-
+        account or wallet. Long-term held positions are never touched.
+
+RULE 4  Testnet first. No live capital is deployed until the system has run in paper
+        trading mode and produced a log of decisions that the trader has reviewed and
+        is satisfied with.
+
+RULE 5  The bot does not gamble. Every position has a defined risk amount, a defined
+RULE 6  stop, and a defined target before entry. No open-ended trades.
+
+        The system is designed for a weekly engagement rhythm. The trader thinks on
+        Sunday. The bot works during the week. Any interface or notification design
+        that encourages daily or intraday engagement has failed.
+
+RULE 7  Tenant isolation is absolute. One user's capital, keys, positions, configuration,
+        and data are never visible to, accessible by, or affected by any other user. Not
+        even partially. Not even in error states.
+
+3. Engagement Model and Operator Wellbeing
+
+This section is not a usability requirement. It is a wellbeing requirement, and it must be
+understood as such. The trader has direct experience of the psychological cost of obsessive
+manual trading -- the 2am position checks, the emotional interference, the compounding stress.
+This system exists partly to solve a technical problem and partly to solve a human one.
+
+ DESIGN  An interface that makes it easy to obsess has failed, regardless of how well
+MANDATE  the bot trades. Every interface and notification decision must be evaluated
+         against the question: does this encourage disengagement or engagement?
+
+3.1 The Weekly Rhythm
+
+The system is designed around a single primary interaction per week -- a Sunday session in
+which the trader reviews performance, sets the regime for the coming week, reviews any agent-
+suggested changes (Phase 3), and adjusts parameters if needed. This session should be
+satisfying and complete. The trader should feel no pull to return to the system until the following
+Sunday.
+
+    · Sunday is the decision day -- regime setting, parameter review, Backtest Sunday
+         results (Phase 3)
+
+    · The interface presents a weekly view by default, not a real-time blotter
+
+    · The weekly summary is the primary narrative -- what happened, why, what the bot
+         decided
+
+    · No action should be required during the week under normal operating conditions
+
+3.2 The On/Off Switch
+
+The trader can halt the bot entirely at any time via a single, prominent control. This is not an
+emergency button -- it is a first-class operating mode with defined, graceful behaviour:
+
+    · OFF state: no new positions are opened under any circumstances
+
+    · Existing positions when switched OFF: managed to their natural structural exits -- stops
+         and targets already set are honoured, no immediate forced close
+
+    · Optional immediate close: a secondary action available if the trader wants to exit all
+         positions now rather than wait for natural exits -- requires explicit confirmation
+
+    · The OFF state is visually unambiguous -- the interface communicates clearly that the
+         bot is not trading
+
+    · Switching back ON requires regime selection -- the bot does not resume from a
+         previous state, it requires a fresh deliberate decision
+
+3.3 Notification Design -- Tiered Alert Model
+
+Notifications are the primary vector through which a hands-off system becomes an obsessive
+one. The notification model has three tiers, each with a distinct channel and purpose:
+
+Tier     Trigger              Channel  Behaviour
+Silence                       None
+         Normal operation --           No notification of any kind. The
+         trades opening,               bot doing its job is not news.
+Daily Digest   closing, stops hitting,  WhatsApp -- plain    One message per day. Trades
+Weekly Report  P&L moving               summary message      taken, current P&L, bot status,
+Urgent Alert   End of each trading                           regime active. Nothing requiring
+               session                  WhatsApp --          action.
+                                        structured weekly
+               Sunday morning           summary              Full week in review. Ready for
+                                                             the Sunday session. Backtest
+               Serious system           WhatsApp --          Sundays experiment results
+               event requiring          immediate, any time  included in Phase 3.
+               human awareness          of day or night
+                                                             Sent instantly. No batching.
+                                                             Wakes the trader if necessary.
+                                                             See trigger list below.
+
+3.4 Urgent Alert Triggers
+The following events trigger an immediate WhatsApp message regardless of time. This list is
+the definition of 'hectic' -- anything not on this list waits for the daily digest:
+
+    · Drawdown limit breached -- daily or weekly. Bot has halted. Immediate awareness
+         required.
+
+    · Emergency market exit executed -- by user or admin. Confirmation that all positions are
+         closed.
+
+    · Exchange API connectivity lost while positions are open -- bot cannot manage open
+         positions
+
+    · Position could not be closed when instructed -- order rejected or timed out
+    · Bot process crashed or halted unexpectedly -- not a clean shutdown
+    · Futures margin below warning threshold (Phase 3) -- liquidation risk imminent
+    · Admin has halted the tenant's instance -- user is notified their bot has been stopped
+    · API key invalid or permissions changed -- bot cannot trade
+
+3.5 WhatsApp Business API Implementation
+All notifications are delivered via the operator's registered WhatsApp Business account
+(Bethink). This means alerts arrive from a known, trusted number -- not an unknown service.
+
+    · Platform: WhatsApp Business API via Meta -- operator's existing registered account
+    · Sender identity: Bethink WhatsApp Business number -- users recognise the sender
+    · Onboarding opt-in: users must explicitly opt in to WhatsApp notifications during account
+
+         setup. Opt-in is required before the bot instance can go live.
+    · Message templates: urgent alert templates must be pre-approved by Meta before
+
+         launch. Templates should be simple and functional -- e.g. ' [Platform] Alert: [event
+         description] on your account. Log in to review: [link]'
+    · Conversation window: within 24 hours of any user interaction, freeform messages can
+         be sent. Outside this window, pre-approved templates are used. Urgent alerts must have
+         approved templates to guarantee delivery.
+    · Per-tenant WhatsApp number: collected during onboarding, stored per tenant, used
+         exclusively for that tenant's notifications
+
+    · Opt-out respected: if a user opts out of WhatsApp messages, urgent alerts fall back to
+         email. The bot does not halt -- but the developer must implement a fallback channel.
+
+    · Developer note: Twilio's WhatsApp Business API wrapper is a common and well-
+         documented implementation path if direct Meta integration is complex
+
+The visual interface, when accessed during the week, should feel like reading a report -- not
+like watching a live feed:
+
+    · Default view is the weekly summary -- the trader must actively navigate to real-time
+         views
+
+    · No auto-refreshing ticker or live P&L counter on the default screen
+    · Real-time chart is available but not the landing view -- it is a drill-down, not the
+
+         homepage
+    · The interface communicates clearly when there is nothing to do -- 'Bot operating
+
+         normally. Next review: Sunday.' is a successful interface state.
+
+4. System Architecture
+
+The system is composed of five layers. The developer has full latitude on technology stack,
+language, and infrastructure choices. The following describes functional layers, not
+implementation prescriptions.
+
+4.1 Layer 0 -- Regime Engine
+
+The outermost layer. Sits above everything else and feeds a context signal downward. Its
+default state is suppression -- the bot does nothing until the trader has made a conscious,
+deliberate decision about what kind of market they are in. This is by design.
+
+DEFAULT  On startup, and whenever regime is unclear, the Regime Engine sets state to
+  STATE  NO TRADE. The bot is silent. Trading requires an affirmative regime selection
+         -- the absence of a decision is itself a decision not to trade.
+
+This architecture reflects a core truth about markets: most losses come not from bad trades in
+understood conditions, but from trades taken in conditions that don't fit any known pattern.
+When the market doesn't make sense, the correct behaviour is to do nothing. The bot enforces
+this mechanically so the trader doesn't have to rely on discipline alone.
+
+Known Regime Profiles
+
+The following regimes are defined at launch. The architecture must be extensible -- new
+regimes can be added without rebuilding the system, because experience will reveal patterns
+that cannot yet be named.
+Regime           Market Character                         Bot Behaviour
+NO TRADE
+(default)        Unclear, transitional, or unclassified.  All entries suppressed. Existing
+Ranging          Market does not fit a known pattern.     positions managed to exit. Bot is
+                                                          silent.
+Trending         Price oscillating between defined
+                 upper and lower liquidity pools.         Full strategy active. Both sides
+Breakout         Sweeps reverse predictably. Highest-     tradeable. Tighter targets -- fade
+                 probability environment for core         back to range midpoint or opposite
+High Volatility  strategy.                                boundary. Mode A and Mode B
+                                                          both permitted.
+Low Liquidity    Directional structure -- higher
+                 highs/lows or lower highs/lows.          Strategy active in trend direction
+Accumulation /   Sweeps tend to continue rather than      only. Counter-trend setups
+Distribution     reverse cleanly.                         suppressed. Mode B preferred over
+                                                          Mode A. Larger targets -- ride to
+                 Price has ranged and is beginning to     next major level. Trailing stops
+                 commit to a direction. Highest false-    weighted more heavily.
+                 signal environment. Levels are being
+                 tested and broken rather than            Reduced activity. Only highest-rank
+                 respected.                               levels considered. Position size
+                                                          reduced. Mode A suppressed --
+                 News-driven, erratic. Levels blown       confirmation entries only.
+                 through without respect. Manipulation
+                 amplified. Spread and slippage           All entries suppressed. If positions
+                 elevated.                                are open, tighter emergency stops
+                                                          applied. Bot flags state prominently
+                 Weekend, public holiday, or thin         in UI.
+                 session. Order book shallow. Levels
+                 less reliable. Moves can be              Entries suppressed or heavily
+                 exaggerated and misleading.              restricted per configuration.
+                                                          Existing positions may be closed at
+                 Appears similar to ranging but           session end rather than held
+                 sweeps are more aggressive and           through.
+                 frequent. Smart money positioning
+                 phase before a significant directional   Strategy active but with caution
+                 move.                                    flags. Sweep failures are expected
+                                                          to be higher. Position sizing
+                                                          reduced. Both modes permitted but
+                                                          R:R minimums raised.
+
+Each regime profile defines: which setup modes are permitted, minimum R:R thresholds,
+position size multiplier (relative to base risk %), and which temporal windows apply. Profiles are
+configurable -- the trader adjusts them as understanding deepens.
+
+Regime Selection -- Phase 1
+
+In Phase 1, regime selection is entirely manual. The trader assesses the daily and weekly chart
+each morning and sets the regime via a prominent control in the interface. This is deliberate --
+the trader's market read is the edge, not algorithmic detection. The bot enforces the
+consequences of that read.
+    · Regime is set once per session or day -- not traded around intraday unless deliberately
+         changed
+
+    · Changing regime mid-session requires a confirmation dialog -- not accidental
+    · Regime history is logged -- every change recorded with timestamp
+    · The interface displays current regime prominently, always visible
+
+Regime Detection -- Phase 2
+Algorithmic regime detection is a Phase 2 addition, layered on top of the manual system rather
+than replacing it. Possible signals include ADX for trend strength, ATR relative to recent range
+for volatility classification, and higher timeframe structural analysis. The manual override always
+takes precedence.
+
+Extensibility Requirement
+The regime system must be architected to allow new regimes to be defined and added without
+code changes to the strategy engine or risk manager. Markets will present conditions that
+cannot yet be named. The system must accommodate the unknown.
+
+4.2 Layer 1 -- Risk Manager
+The foundational execution layer. Runs before any trade logic. All layers below the Regime
+Engine are downstream of it.
+
+    · Maintains current capital balance
+    · Calculates maximum allowable position size per trade based on defined risk % and
+
+         current regime multiplier
+    · Tracks total open exposure across all positions
+    · Enforces daily and weekly drawdown limits -- halts all trading if breached
+    · Logs every risk decision with timestamp and reasoning
+    · Exposes no override mechanism at runtime
+
+4.3 Layer 2 -- Temporal Filter
+Determines whether the bot is permitted to look for setups at any given moment. Acts as a gate
+-- if the temporal filter is closed, no entries are made regardless of what the market is doing.
+
+    · Session awareness -- London open, New York open, Asian session
+    · Day-of-week filters -- configurable rules per weekday (e.g. reduced activity Monday,
+
+         specific patterns Thursday/Friday)
+    · Weekend mode -- configurable behaviour for low-liquidity weekend markets
+    · Public holiday awareness -- optional, configurable
+    · All temporal rules are configurable via the interface, not hardcoded
+
+4.4 Layer 3 -- Strategy Engine
+Executes the liquidity sweep / reversal strategy within the constraints set by the Regime Engine.
+The active regime profile determines which modes and parameters are available. Detailed
+requirements in Section 4.
+
+    · Level identification -- swing highs/lows, equal highs/lows, session extremes
+    · Proximity detection -- triggers when price approaches a defined level
+    · Sweep confirmation -- detects wick-through-and-close-back pattern
+    · Entry logic -- initial position and scaled re-entry post-sweep
+    · Exit logic -- partial take profit, trailing stop, next-level targeting
+    · All strategy parameters are configurable per regime profile
+
+4.5 Layer 4 -- Visual Interface
+Detailed requirements in Section 5. The interface is a first-class component of the product, not
+an afterthought. It provides the trader with full situational awareness and configuration control,
+including the regime selector as a primary control.
+
+5. Strategy Engine Requirements
+
+4.1 Core Concept
+The strategy is based on the observation that price systematically moves toward areas of
+clustered liquidity (stop clusters, equal highs/lows, session extremes), sweeps through them to
+trigger liquidations and stops, then reverses and moves toward the next liquidity pool in the
+opposite direction.
+
+The bot has two complementary setup modes:
+    · Mode A -- Survive the sweep: Enter at or near a liquidity level, hold through the wick,
+         exit as price reverses. The stop-out is accepted as a possible outcome, not a failure.
+    · Mode B -- Trade the confirmation: Wait for the sweep to complete (wick through, close
+         back inside level), then enter with higher conviction and tighter structural stop.
+
+4.2 Level Identification Requirements
+    · Swing high / swing low detection -- configurable lookback period
+    · Equal highs / equal lows -- price levels touched multiple times without breaking
+    · Previous day high / low -- daily OHLC levels
+    · Previous week high / low -- weekly OHLC levels
+    · Session highs / lows -- per trading session (London, NY, Asia)
+    · Liquidation cluster awareness -- integration with Coinglass liquidation heatmap API
+         where available
+    · Levels are ranked by significance -- confluence of multiple level types increases rank
+4.3 Entry Requirements
+    · Initial entry: scaled across a configurable price range near the level (e.g. 3 tranches over
+         0.5%)
+    · Re-entry: triggered on sweep confirmation candle close, larger size, stop placed beyond
+         the wick
+    · Entry only permitted when: risk manager approves size, temporal filter is open, level
+         rank meets minimum threshold
+    · Configurable minimum R:R ratio -- no trade entered below defined ratio (e.g. 1:2)
+
+4.4 Exit Requirements
+    · Partial exit at first target (configurable %, e.g. 50% of position)
+    · Trailing stop on remainder -- trails to next structural level
+    · Full exit target -- next significant liquidity level in direction of trade
+    · Hard stop -- fixed, structural, never moved against the trade
+    · Time-based exit -- optional, closes trade if target not reached within configurable
+         window
+
+6. Visual Interface Requirements
+
+The interface is not a simple chart with overlays. It is a trading operations centre -- the trader
+should be able to understand the complete state of the system, the market, and all active
+decisions at a glance. Think beyond charting software toward something closer to a mission
+control display.
+
+5.1 Design Principles
+    · Dark theme -- designed for extended screen time, low eye strain
+    · Information density over decoration -- every element earns its place
+    · At-a-glance readability -- critical state visible without scrolling or drilling down
+    · Real-time -- all data updates live without page refresh
+    · Configurable layout -- trader can rearrange panels to their preference
+
+5.2 Primary Chart Panel
+The main chart is the centrepiece but is enriched beyond standard charting:
+
+    · Candlestick chart -- standard OHLC, multiple timeframe toggle (1m, 5m, 15m, 1h, 4h,
+         1D)
+
+    · Identified liquidity levels rendered as horizontal zones -- colour-coded by type and
+         significance rank
+
+    · Active positions shown on chart -- entry price, current stop, targets as horizontal lines
+    · Sweep events marked -- historical and current session wicks through levels annotated
+    · Session boundaries -- vertical lines showing London open, NY open, session close
+    · Liquidation heatmap overlay -- if data is available, rendered as a heat layer behind
+
+         candles
+    · Day-of-week indicator -- current session context always visible
+
+5.3 Risk Dashboard Panel
+Always visible. Cannot be hidden or minimised. Shows:
+
+    · Current capital -- total, deployed, available
+    · Open risk -- total current exposure as % of capital
+    · Daily P&L -- current session performance
+    · Weekly P&L -- rolling 7-day performance
+    · Drawdown gauge -- visual indicator of current drawdown vs daily/weekly limits
+    · Bot status -- ACTIVE / PAUSED / HALTED with clear colour coding (green / amber /
+
+         red)
+    · Trade count -- number of trades today / this week
+
+5.4 Active Trades Panel
+Live view of all open positions:
+
+    · Entry price, current price, unrealised P&L
+    · Stop price and distance in % and dollar terms
+    · Target price and projected P&L at target
+    · Current R:R ratio live-updating
+    · Time in trade
+    · Which setup mode triggered the trade (Mode A / Mode B)
+    · Manual close button -- trader can override and close any position
+
+5.5 Level Map Panel
+A vertical price ladder showing the full liquidity landscape:
+
+    · Current price in context of all identified levels above and below
+    · Distance to nearest level -- in price and % terms
+    · Level significance indicators -- confluence count, level type, age
+    · Estimated liquidity density -- where the largest clusters sit
+
+5.6 Regime Control Panel
+The most prominent interactive element in the interface. The trader's primary act each session
+is setting the regime -- the panel makes this deliberate and visible:
+
+    · Large, clearly labelled regime selector -- current regime displayed in dominant position
+    · Colour-coded regime states -- Ranging (green), Trending (blue), Breakout (amber),
+
+         High Volatility (red), NO TRADE (grey/dark)
+    · NO TRADE state visually distinct -- the interface should feel quieter, more subdued,
+         when no trading is permitted. Not an error state -- a deliberate state.
+
+    · Regime change requires a confirmation dialog with a plain-language summary of
+         consequences -- which modes activate or suppress, position size multiplier effect
+
+    · Active profile summary -- which setup modes are currently permitted, current R:R
+         minimum, size multiplier relative to base
+
+    · Regime duration indicator -- how long the current regime has been active
+    · Regime history -- scrollable log of all changes this week, with timestamps
+    · Phase 2 placeholder -- reserved space for an algorithmic regime suggestion signal,
+
+         shown as a secondary indicator alongside the manual selection, never overriding it
+
+5.7 Temporal Context Panel
+Session and calendar awareness always visible:
+
+    · Current session -- which trading session is active
+    · Time to next session open -- countdown
+    · Day-of-week with pattern notes -- e.g. 'Thursday -- historically elevated sweep activity'
+    · Bot activity schedule -- when the bot will and will not look for entries today
+
+5.8 Trade Log Panel
+Scrollable, filterable record of all bot decisions:
+
+    · Every entry, exit, and stop-out with timestamp
+    · Reason for each decision -- which level, which mode, which temporal filter, which
+
+         regime was active
+    · P&L per trade
+    · Exportable to CSV for external analysis
+
+5.9 Configuration Panel
+All strategy and risk parameters are configurable through the UI -- no config file editing required
+for routine adjustments:
+
+    · Risk % per trade
+    · Maximum concurrent positions
+    · Daily / weekly drawdown limits
+    · Temporal filter rules per session and day
+    · Regime profiles -- R:R minimums, size multipliers, permitted modes per regime
+    · Minimum level rank for entries
+    · Minimum R:R ratio
+    · Entry scaling parameters
+    · Partial exit % and trailing stop rules
+    · Changes to risk parameters require confirmation dialog -- not accidental
+7. Risk Management Requirements
+
+7.1 Position Direction and Leverage Policy
+
+The platform supports both long and short positions in spot crypto markets. This means the bot
+has an angle regardless of market direction -- it can trade the downside of a liquidity sweep as
+readily as the upside.
+
+       NO   Leverage is prohibited in Phase 1 and Phase 2. No margin trading. No
+ LEVERAGE   leveraged products. Every position is backed 1:1 by the tenant's capital.
+            This keeps the risk model clean, eliminates liquidation risk, and caps
+   -- HARD  maximum loss at the position size. This is a non-negotiable architectural
+CONSTRAINT  constraint, not a configuration option.
+
+· Long positions -- buy an asset expecting price to rise. Maximum loss is the position
+    size. Bot sells to exit.
+
+· Short positions -- sell an asset expecting price to fall. In spot crypto, this requires the
+    asset to be held or borrowed. Developer to confirm exchange mechanism (spot short
+    selling vs. inverse products). Maximum loss bounded by stop placement.
+
+· Both directions use identical risk manager logic -- same position sizing, same stop
+    rules, same R:R checks
+
+· Futures support -- architected for Phase 3 only. When added, requires additional margin
+    monitoring layer. Detailed in Section 7.3.
+
+7.2 Emergency Market Exit
+
+The fire extinguisher. This is a protection mechanism, not a trading tool. It exists for moments
+when something is genuinely wrong and the priority is to be flat immediately, not to get a good
+price.
+
+  DESIGN    The emergency exit must be reachable in two taps or clicks from any screen.
+PRINCIPLE   It must never be accidentally triggered. It must always work, even when other
+            parts of the system are degraded.
+
+· Closes all open positions for the tenant immediately at market price -- no limit orders, no
+    waiting for targets or stops
+
+· Executes even if it means a poor fill -- speed of exit takes priority over price
+
+· Single confirmation step -- 'Close all positions at market NOW?' -- one confirm, not
+    multiple dialogs
+
+· Available at tenant level -- user can exit their own positions at any time
+
+· Available at admin level -- admin can trigger emergency exit for any individual tenant or
+    all tenants simultaneously
+· Confirmation dialog shows current open positions and estimated exit values so the user
+    knows what they are closing
+
+· After execution, bot is set to OFF state -- does not resume trading until explicitly
+    reactivated with a regime selection
+
+· Full audit log entry -- who triggered it, when, which positions were closed, at what prices
+
+· WhatsApp alert sent immediately after execution -- confirmation that the exit completed,
+    with a summary of positions closed
+
+7.3 Futures -- Phase 3 Safeguards
+
+Futures contracts introduce the possibility of losses exceeding the initial position size if not
+managed correctly. When futures support is added in Phase 3, the following protections are
+mandatory in addition to all existing risk rules:
+
+    · Margin monitoring -- available margin is checked continuously. If margin falls below a
+         configurable safety threshold, the bot exits the position before the exchange can force-
+         liquidate
+
+    · Maximum margin utilisation -- bot will never use more than a configurable % of available
+         margin across all open futures positions
+
+    · Immediate WhatsApp alert -- any time margin drops below the warning threshold, an
+         urgent alert is sent regardless of time of day
+
+    · No adding to losing futures positions -- absolutely prohibited
+
+    · Futures mode requires explicit per-tenant activation by admin -- not available by default
+
+    · No leverage is added to futures positions -- positions are sized to the underlying value,
+         not the margin requirement. The leverage inherent in the futures contract structure is
+         acknowledged but not amplified.
+
+7.4 Risk Requirements Table           Priority  Notes
+                                         MUST
+  Requirement                            MUST   On startup and when regime is unclear,
+  Regime defaults to NO TRADE                   bot takes no new entries. Affirmative
+                                         MUST   selection required.
+  Regime change confirmation             MUST
+                                                Changing regime requires explicit
+  Regime history logged                  MUST   confirmation with summary of
+  Long and short positions supported            consequences. Not accidental.
+
+  No leverage -- hard constraint                All regime changes recorded with
+                                                timestamp. Persistent storage.
+
+                                                Bot can trade in both directions.
+                                                Direction is determined by strategy and
+                                                regime, not hardcoded.
+
+                                                Leverage is architecturally prohibited in
+                                                Phase 1 and 2. Not a configuration
+                                                option.
+Maximum risk per trade                MUST  Configurable % per tenant, default 1% of
+Maximum concurrent open positions     MUST  capital. Bot calculates position size from
+Daily drawdown limit                  MUST  this.
+Weekly drawdown limit                 MUST
+Hard stop on every trade              MUST  Configurable per tenant, default 2. Hard
+Stop cannot be moved against trade    MUST  limit -- no new entries when at max.
+Pre-trade R:R check                   MUST
+Emergency market exit                 MUST  Configurable per tenant. Bot halts all
+Emergency exit -- admin override      MUST  trading for remainder of day if breached.
+Separate account enforcement        SHOULD
+Emergency halt button                 MUST  Configurable per tenant. Bot halts all
+Audit log of all risk decisions       MUST  trading for remainder of week if
+Paper trading mode                    MUST  breached.
+Slippage and fee modelling          SHOULD
+                                            No trade may be opened without a
+                                            defined stop. Stop cannot be removed
+                                            post-entry.
+
+                                            Stop may only be moved in the direction
+                                            of profit. Never widened.
+
+                                            Trade rejected if projected R:R is below
+                                            configured minimum.
+
+                                            Closes all positions immediately at
+                                            market. Two taps max. Always
+                                            reachable. Always works.
+
+                                            Admin can trigger emergency exit for
+                                            any tenant or all tenants from oversight
+                                            dashboard.
+
+                                            Bot operates only on designated sub-
+                                            account. Cannot access other balances.
+
+                                            Halts new entries without closing
+                                            positions. Distinct from emergency
+                                            market exit.
+
+                                            Every risk calculation logged with inputs
+                                            and outputs. Persistent storage.
+
+                                            Full simulation with no real orders.
+                                            Identical logic, identical logs.
+
+                                            Paper trading and backtesting must
+                                            account for realistic fees and slippage.
+
+8. Data Requirements
+
+7.1 Market Data
+    · Real-time OHLCV data -- via exchange websocket, sub-second latency
+    · Historical OHLCV -- minimum 2 years for backtesting and level identification
+    · Order book depth -- for execution quality and level confirmation
+    · Funding rate data -- contextual awareness for crypto perpetuals
+
+7.2 External Data
+    · Coinglass liquidation heatmap API -- for liquidation cluster overlay (where available and
+         reliable)
+    · Exchange-specific liquidation data -- if accessible via API
+
+7.3 Internal Data
+    · All trades -- full record, persistent
+    · All bot decisions -- with reasoning, persistent
+    · All risk calculations -- with inputs, persistent
+    · Configuration history -- all parameter changes logged with timestamp
+    · Performance metrics -- aggregated daily, weekly, monthly
+
+9. Phased Delivery
+
+Phase    Milestone         Deliverables
+Phase 0  Foundation
+Phase 1  Core Bot          Risk manager, exchange connectivity, basic order
+Phase 1  Visual Interface  execution, paper trading mode, on/off switch, minimal
+Phase 2  Live Deployment   logging UI
+Phase 3  Backtest Sundays
+                           Level identification, temporal filters, entry/exit logic, full
+Phase 4  Expansion         logging, testnet deployment
+
+                           Full dashboard as specified in Section 6, running against
+                           paper trading. Weekly summary as default view.
+                           Notification system with daily digest only.
+
+                           Transition to live with small capital, monitoring period,
+                           performance review. Engagement model fully
+                           implemented.
+
+                           Autoresearch-style self-improving loop. Agent runs
+                           experiments against backtested data during the week,
+                           proposes parameter changes, trader reviews and approves
+                           on Sunday. No change goes live without explicit approval.
+
+                           Additional pairs, regime detection assistance, potential
+                           additional exchange
+
+10. Success Criteria
+Success in Phase 1 is not measured by profit. It is measured by system behaviour:
+
+    · The bot defaults to NO TRADE on startup and never enters a trade without an
+         affirmative regime selection
+
+    · The bot correctly executes both long and short positions with identical risk logic
+    · No leverage is ever applied -- position sizes are always backed 1:1 by capital
+    · The emergency market exit closes all positions at market within one confirmation
+
+         step, from any screen
+    · The on/off switch halts new entries immediately and handles existing positions
+
+         gracefully
+    · The bot never opens a position that violates the risk % rule
+    · The bot never opens a position without a defined stop
+    · The bot halts correctly when drawdown limits are breached
+    · The bot only enters during permitted temporal windows
+    · Urgent WhatsApp alerts are delivered within 60 seconds of the triggering event
+    · No trade-level notifications are sent -- only daily digest, weekly report, and urgent
+
+         alerts
+    · Every decision is logged with sufficient detail to reconstruct why it happened
+    · The interface defaults to weekly summary view -- real-time views require
+
+         navigation
+    · Tenant isolation is verified -- no data from one tenant is accessible to another
+
+         under any condition
+    · Paper trading results are consistent with backtested expectations
+
+Profitability is a Phase 2 evaluation criterion, after the system has proven it behaves correctly.
+
+11. Backtest Sundays -- Phase 3 Specification
+
+Backtest Sundays is the name for the Phase 3 self-improving loop. Inspired by Andrej
+Karpathy's autoresearch framework, it applies the same principle to trading strategy refinement:
+an AI agent experiments autonomously during the week, the trader reviews results on Sunday,
+and approved changes go live the following week.
+
+CORE  The agent proposes. The trader approves. Nothing changes in the live bot
+
+PRINCIPLE without an explicit Sunday decision. The agent works; the human governs.
+
+11.1 How It Works
+
+During the week, the agent runs a continuous experiment loop against historical backtest data:
+
+    · Agent selects a parameter or rule to vary -- position sizing, entry thresholds, R:R
+         minimums, temporal filter rules, regime profile settings
+    · Agent runs the variation against the backtest environment with a fixed time budget
+    · Agent records the result -- P&L, drawdown, win rate, number of trades -- against a
+
+         baseline
+    · Agent keeps or discards the change based on whether the metric improved
+    · Agent iterates -- approximately 10-20 experiments per day running quietly in the
+
+         background
+    · On Sunday morning, the agent presents a structured experiment log: what was tried,
+
+         what improved, what was discarded, and a ranked list of proposed changes for the
+         trader's review
+
+11.2 The Sunday Session
+The trader's Sunday session has a defined structure:
+
+    · Review the week's trade log -- what did the live bot do and why
+    · Review the experiment log -- what did the agent discover
+    · For each proposed change: approve (goes live next week), reject (discarded), or defer
+
+         (run more experiments)
+    · Set or confirm the regime for the coming week
+    · Adjust any parameters manually if desired
+    · Session complete -- no further engagement required until next Sunday
+
+11.3 Safety Constraints on the Agent
+The agent operates within strict boundaries -- it cannot touch the live bot, live capital, or any
+production system:
+
+    · Agent has read-only access to historical market data and the backtest engine
+    · Agent has no access to the live exchange connection or live positions
+    · Agent can only propose changes -- it cannot apply them
+    · All approved changes are applied by the system on Sunday after explicit trader
+
+         confirmation
+    · The risk manager parameters are excluded from agent experimentation -- those are
+
+         human decisions only
+    · The on/off switch and regime selection remain exclusively human controls
+
+11.4 Architectural Prerequisites -- Build From Phase 0
+Backtest Sundays requires the following to be designed in from the beginning, even though the
+feature is not delivered until Phase 3. Retrofitting these would be expensive:
+
+    · Backtesting engine must be a clean, isolated, scriptable module -- callable
+         programmatically with defined inputs and outputs, not a UI-only feature
+
+    · Strategy parameters must be externalised in a structured configuration format -- the
+         agent must be able to modify them without touching core execution code
+
+    · Experiment log schema must be defined in Phase 1 -- consistent structure from the first
+         backtest run, so Phase 3 has clean comparable data
+· Performance metrics must be standardised -- P&L, drawdown, win rate, average R:R
+    calculated identically across live trading and backtest environments
+
+· The Sunday review interface must be designed as a first-class screen -- not a report
+    bolted on later
+
+12. Multi-Tenancy and Platform Architecture
+
+The platform serves multiple users from a single deployment. Each user has a fully isolated bot
+instance. The strategy engine is centrally maintained. Risk configuration, capital, and exchange
+connectivity are per-tenant. The admin has visibility and control across all instances.
+
+12.1 Tenant Model    Scope                  Notes
+                     Central
+  Component                                 One codebase, maintained by
+  Strategy engine    Central (definitions)  admin. All tenants run the same
+                     Per-tenant             version. Updates deploy to all
+  Regime profiles    Per-tenant             instances simultaneously.
+  Risk parameters    Per-tenant
+  Regime selection                          Admin defines the available
+  Exchange API keys  Per-tenant             regimes. Users select which
+                                            regime is active for their instance.
+  Capital            Per-tenant
+                     Per-tenant             Each user configures their own
+  Trade history      Per-tenant metered     risk %, drawdown limits, position
+  Bot instance                              sizing, R:R minimums.
+  Model usage (AI)
+                                            Each user sets their own active
+                                            regime independently.
+
+                                            Users connect their own
+                                            exchange accounts. Keys are
+                                            encrypted at rest, never logged,
+                                            never visible to other tenants or
+                                            admin.
+
+                                            Each user trades their own capital
+                                            on their own exchange account.
+                                            Platform never holds or touches
+                                            user funds.
+
+                                            Completely isolated. Users see
+                                            only their own trades.
+
+                                            Each user runs an independent
+                                            process. One instance crashing or
+                                            halting does not affect others.
+
+                                            Backtest Sundays agent calls are
+                                            tracked per tenant for billing
+                                            purposes.
+Admin oversight  Cross-tenant read  Admin can view all instances.
+                                    Cannot see exchange API keys.
+                                    Can halt any instance.
+
+12.2 Authentication and Access Control
+
+Authentication is handled via Google OAuth exclusively. There are no passwords stored on the
+platform.
+
+    · Google OAuth -- all users authenticate via their Google account
+    · Invite-only registration -- users cannot self-sign-up. Admin sends an invitation link. Only
+
+         invited Google accounts can complete registration.
+    · Three access roles: Admin (full cross-tenant visibility and control), User (own instance
+
+         only), Suspended (account disabled, bot halted, login blocked)
+    · Admin role is assigned manually -- not self-assignable under any condition
+    · Session management -- standard OAuth token handling, configurable session duration
+    · Revocation -- admin can suspend any user account instantly, which halts their bot
+
+         instance and blocks login
+
+12.3 Exchange API Key Management
+
+Users connect their own exchange accounts by providing API keys. The platform treats these
+keys with the highest level of security:
+
+    · Keys are encrypted at rest using a strong encryption standard -- never stored in
+         plaintext
+
+    · Keys are never logged -- not in application logs, error logs, or any diagnostic output
+
+    · Keys are never visible to admin -- the admin oversight dashboard shows instance
+         status, not credentials
+
+    · Keys are never transmitted to any third party or external service other than the exchange
+         they belong to
+
+    · Users can rotate or delete their keys at any time -- deletion immediately halts the bot
+         instance
+
+    · The platform supports read/trade permissions only -- users should be instructed to
+         never provide withdrawal permissions to platform API keys
+
+    · Key validation on entry -- the platform verifies the key is valid and has correct
+         permissions before activating the bot instance
+
+12.4 Tenant Isolation Requirements
+
+ISOLATION  A failure in tenant isolation is a critical security incident, not a bug. The
+MANDATE    architecture must make cross-tenant data access structurally impossible, not
+           merely improbable.
+
+· Each tenant's data is logically separated at the database level -- tenant ID is enforced
+    on every query
+    · Bot instances run as isolated processes -- a crash, memory leak, or runaway loop in
+         one instance cannot affect another
+
+    · API key decryption is scoped to the authenticated tenant's session only
+    · The admin oversight view reads aggregate and status data only -- it does not have a
+
+         code path that returns another tenant's configuration or trade data in raw form
+    · Error messages never contain data from other tenants -- even in edge cases
+    · Rate limiting is per-tenant -- one tenant's heavy usage cannot degrade another tenant's
+
+         bot performance
+
+12.5 Admin Oversight Dashboard
+The admin has a dedicated view that no regular user can access. It is designed for monitoring
+and intervention, not micromanagement:
+
+    · All instances at a glance -- status (ACTIVE / PAUSED / HALTED / ERROR), current
+         regime, today's P&L, weekly P&L, open positions count
+
+    · Health indicators -- any instance in ERROR or unexpectedly HALTED state is flagged
+         prominently
+
+    · Instance drill-down -- admin can view the full trade log, decision log, and configuration
+         of any tenant instance
+
+    · Halt control -- admin can halt any individual instance or all instances simultaneously.
+         Halt follows the same graceful behaviour as the user-facing on/off switch.
+
+    · Usage dashboard -- AI model calls per tenant, current billing period, cumulative usage.
+         Sortable and exportable.
+
+    · User management -- invite new users, view all users, suspend accounts, revoke
+         invitations
+
+    · Platform health -- overall system status, exchange API connectivity per tenant, any
+         infrastructure alerts
+
+    · Aggregate analytics -- cross-tenant performance patterns (anonymised where
+         appropriate), regime distribution across instances, strategy performance at platform level
+
+12.6 Usage Metering and Billing
+Every AI model call made by the Backtest Sundays agent is attributed to the tenant whose
+instance triggered it. This is the primary billable unit.
+
+    · Every LLM API call is tagged with tenant ID, timestamp, model, token count (input and
+         output), and cost at time of call
+
+    · Usage is aggregated per tenant per billing period (monthly recommended)
+    · Admin dashboard shows real-time usage per tenant -- no surprises at billing time
+    · Tenants can optionally be shown their own usage in their interface -- configurable by
+
+         admin
+    · Usage caps per tenant -- admin can set a monthly model usage limit per user. Bot
+
+         continues trading when cap is hit; only the Backtest Sundays agent pauses.
+    · Billing period export -- admin can export per-tenant usage reports in CSV for invoicing
+    · Phase 1 -- metering and reporting only. Payment processing is out of scope for Phase
+
+         1.
+    · Phase 2 -- integrate payment processing (Stripe recommended). Subscription or usage-
+         based invoicing based on metered data already collected in Phase 1.
+
+12.7 Architectural Prerequisites for Multi-Tenancy
+These must be designed in from Phase 0. Multi-tenancy cannot be retrofitted cheaply:
+
+    · Tenant ID as a first-class concept -- present in every database table, every log entry,
+         every API call from day one
+
+    · Bot runner designed as a process-per-tenant or equivalent isolated execution model --
+         not a single process handling all tenants
+
+    · Secrets management -- a dedicated secrets store (e.g. HashiCorp Vault, AWS Secrets
+         Manager) from the start, not environment variables
+
+    · Invitation system -- email-based invite flow with expiring tokens, integrated with Google
+         OAuth
+
+    · Audit log -- every admin action against a tenant instance is logged with timestamp and
+         admin identity
+
+13. Market Registry and Pair Management
+
+The platform maintains a centrally managed registry of tradeable crypto pairs. Admin controls
+which markets exist on the platform, which exchanges support them, and what the default risk
+parameters are for each. Tenants select from enabled pairs only -- they cannot trade
+something the admin has not explicitly made available.
+
+  DESIGN   Not every crypto pair has the liquidity characteristics the strategy requires.
+RATIONALE  Admin controls the registry to ensure the bot is only applied to markets
+           where the liquidity sweep mechanics are reliable. A tenant should never be
+           able to select an illiquid or unsuitable pair.
+
+13.1 Market Registry -- Admin CRUD
+
+Admin has full create, read, update, and delete control over the market registry via the admin
+dashboard:
+
+    · Create -- add a new trading pair to the registry. Required fields: base asset, quote
+         asset, supported exchange(s), status (enabled/disabled), per-pair default risk
+         parameters
+
+    · Read -- view all pairs in the registry with their status, exchange availability, and current
+         tenant usage (how many tenants are actively trading this pair)
+
+    · Update -- edit any pair's metadata, defaults, or exchange availability. Changes to
+         defaults do not retroactively affect tenants already configured -- they apply to new
+         selections only
+· Delete -- remove a pair from the registry. Cannot delete a pair that is currently active for
+    any tenant. Admin must first disable it and wait for tenants to migrate, or force-migrate
+    them with notification
+
+· Enable / Disable toggle -- quick status change without full deletion. Disabled pairs
+    remain in the registry for historical data purposes but cannot be selected by new tenants.
+    Existing tenants on a disabled pair are flagged in the admin dashboard and must be
+    migrated.
+
+13.2 Per-Pair Metadata
+Each pair in the registry carries the following attributes:
+
+Field                  Type                 Purpose
+
+Base / Quote Asset     Text                 e.g. BTC / USDT. Defines the pair.
+
+Display Name           Text                 Human-readable label shown to tenants --
+                                            e.g. 'Bitcoin / Tether'
+
+Supported Exchanges    Multi-select         Which exchanges in the platform's
+                                            supported list offer this pair. Determines
+                                            tenant eligibility based on their connected
+                                            exchange.
+
+Status                 Enabled / Disabled   Controls tenant availability. Disabled pairs
+                                            are hidden from selection but retained for
+                                            history.
+
+Minimum Order Size     Number               Exchange-defined minimum. Risk manager
+                                            uses this to validate position sizing
+                                            calculations.
+
+Default Risk %         Number               Admin-set default risk per trade for this pair.
+                                            Pre-populates tenant configuration on
+                                            selection. Tenant can adjust within bounds.
+
+Default Max Positions  Number               Admin-set default concurrent position limit
+                                            for this pair.
+
+Default Min R:R        Number               Admin-set default minimum R:R ratio for
+                                            this pair.
+
+Liquidity Rating       Low / Medium / High  Admin-assigned rating indicating how
+                                            suitable this pair is for the liquidity sweep
+                                            strategy. Shown to tenants as guidance.
+
+Notes                  Text                 Admin-facing notes -- e.g. 'Higher spread
+
+                                            during Asian session', 'Avoid during major
+
+                                            BTC news events'
+
+Date Added             Timestamp            When the pair was added to the registry.
+                                            Audit trail.
+
+Added By               Admin user           Which admin created the registry entry.
+13.3 Tenant Pair Selection
+From the tenant's perspective, pair selection is simple -- they see a curated list of enabled
+pairs, not the full registry:
+
+    · Tenant sees only enabled pairs compatible with their connected exchange
+    · Each pair is shown with its display name, liquidity rating, and any admin notes marked
+
+         as tenant-visible
+    · Per-pair defaults pre-populate the tenant's risk configuration on selection -- tenant can
+
+         adjust within admin-defined bounds
+    · Phase 1 -- one active pair per tenant. Changing pair requires deactivating the current
+
+         bot instance first.
+    · Phase 3 -- multiple pairs per tenant as separate isolated bot instances, each with their
+
+         own risk configuration
+
+13.4 Exchange Compatibility
+Pairs are linked to exchanges in the registry. This drives two things:
+
+    · Tenant eligibility -- when a tenant connects their exchange API key, the pair selector
+         filters to only show pairs supported on that exchange
+
+    · Admin visibility -- the registry view shows, per pair, which exchanges support it and how
+         many tenants are using it on each exchange
+
+    · If a tenant's exchange drops support for a pair (rare but possible), their instance is
+         flagged in the admin dashboard and an urgent WhatsApp alert is sent to the tenant
+
+13.5 Audit and History
+    · All registry changes are logged -- who made the change, what changed, when
+    · Disabled pairs are never deleted from history -- trade data associated with a pair is
+         retained even after the pair is removed from the registry
+    · Admin dashboard shows pair performance analytics -- aggregate P&L across all tenants
+         trading each pair, useful for assessing which pairs the strategy performs best on
+
+14. Open Questions for Developer
+
+The following are intentionally left to developer discretion or require early discussion:
+
+    · Technology stack -- language, framework, database, hosting environment
+    · Exchange selection -- Binance vs Bybit vs other, based on API reliability and SA
+
+         accessibility
+    · Infrastructure -- cloud hosted required for multi-tenancy and uptime; VPS or managed
+
+         cloud (AWS/GCP/Railway) to be proposed by developer
+    · Secrets management -- dedicated secrets store required from Phase 0; developer to
+
+         propose solution
+    · Bot process isolation -- process-per-tenant, container-per-tenant, or equivalent;
+         developer to propose model
+
+    · UI technology -- web-based dashboard required for multi-tenant access; developer's
+         choice of framework
+
+    · Websocket vs REST -- real-time data strategy per tenant instance
+    · Backtesting framework -- must be scriptable and isolated per Section 11.4; integrate
+
+         existing library or build lightweight custom
+    · Alerting -- daily digest and urgent alerts via email or Telegram; per-tenant notification
+
+         settings
+    · Backtest Sundays agent -- LLM-based or algorithmic experimentation loop; developer to
+
+         propose approach in Phase 2
+    · Billing integration -- Stripe or equivalent for Phase 2; metering infrastructure must be
+
+         ready in Phase 1
+    · Deployment -- containerisation (Docker + orchestration) strongly recommended for
+
+         multi-tenant isolation and scalability
+
+This document was produced from a detailed strategy conversation and represents the trader's intentions and
+requirements. It is a living document -- parameters and priorities may evolve as development progresses and paper
+trading results are reviewed.
+

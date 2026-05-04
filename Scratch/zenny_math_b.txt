@@ -1,0 +1,240 @@
+ ZENNY Mathematical &amp; Calculation Specification Document 5B — Sections 10–18 Pool Identification · Fibonacci 
+Extensions · CVD · Absorption · Sessions · Gap Width April 2026 — Confidential This document extends Document 5 
+with the missing calculation sections. All formulas are research-grounded. Every number has a source. No 
+hallucinations. 10 Pool Identification Algorithm 10.1 The two detection inputs Pool identification uses two inputs 
+simultaneously: swing extrema from candle data and tick volume clusters from the order flow. Neither alone is 
+sufficient. Swing extrema tell you where price has reversed historically. Tick clusters tell you where order flow is 
+concentrating in real time. A level confirmed by both is a pool. A level with only one signal is a candidate, not yet a 
+pool. 10.2 FindLocalExtrema — precise algorithm Research confirms the standard definition: a swing high is a candle 
+whose high is strictly greater than all surrounding candles within the lookback window. A swing low is a candle whose 
+low is strictly less than all surrounding candles. FindLocalExtrema — pivot detection with N candles each side 
+swing_high[i] = True iff high[i] &gt; max(high[i-N..i-1]) AND high[i] &gt; max(high[i+1..i+N])
+swing_low[i] = True iff low[i] &lt; min(low[i-N..i-1]) AND low[i] &lt; min(low[i+1..i+N]) Where: N = 5 — candles on 
+each side. Research-confirmed minimum: at least 2 candles on each side required. 5 provides reliable signal on 1H 
+timeframe without excessive lag. strictly greater/less = equal values on either side do NOT qualify — ties are 
+excluded high[i] = the candle high of the candle at position i low[i] = the candle low of the candle at position i 
+lookback for candidates = 200 candles maximum history scanned for swing detection minimum separation = two swing highs 
+must be at least N+1 candles apart. Two highs within N candles = only the higher one kept. // FindLocalExtrema 
+implementation const N = 5 // candles each side function isSwingHigh(candles, i) { if (i &lt; N || i &gt; 
+candles.length - N - 1) return false const pivot = candles[i].high for (let j = i-N; j &lt;= i+N; j++) { if (j === i) 
+continue if (candles[j].high &gt;= pivot) return false // strict: &gt;= not just &gt; } return true } function 
+isSwingLow(candles, i) { if (i &lt; N || i &gt; candles.length - N - 1) return false const pivot = candles[i].low for 
+(let j = i-N; j &lt;= i+N; j++) { if (j === i) continue if (candles[j].low &lt;= pivot) return false // strict: &lt;= 
+not just &lt; } return true } // Note: N+1 minimum separation enforced by definition. // If high[i] and high[i+3] are 
+both swing highs: // high[i+3] cannot be a swing high if high[i] &gt;= high[i+3] // (because high[i] is within its 
+N-window and is &gt;=). // Separation is naturally enforced by the strict inequality. 10.3 ClusterPriceLevels — 
+merging extrema and tick clusters Swing extrema and tick clusters are merged into candidate pool levels. Two signals 
+are considered the same level if they fall within the merge tolerance of each other. ClusterPriceLevels — merge rule 
+same_level = abs(price_A - price_B) / price_A ≤ MERGE_TOLERANCE Where: MERGE_TOLERANCE = 0.005 (0.5%) — 
+research-confirmed tolerance for level clustering price_A = the lower of the two prices being compared price_B = the 
+higher of the two prices being compared result = if same_level = true, merge into one candidate with centre = 
+volume-weighted mean of all prices in the cluster Cluster centre price — volume-weighted mean centre = sum(price[i] 
+× volume[i]) / sum(volume[i]) for all signals in cluster Where: price[i] = price of each signal (swing extreme or tick 
+cluster centre) volume[i] = volume associated with each signal (tick volume for tick clusters; historical volume at 
+price for swing extrema) result = the cluster centre is biased toward whichever signal has the most volume, which is 
+more accurate than a simple average ⚠ When a tick cluster and a swing extremum are within merge tolerance of each 
+other: the tick cluster centre takes priority as the canonical price level (it is live order flow data, the swing 
+extremum is historical). The swing extremum is used only for boundary construction. 10.4 ValidateCandidatePool — 
+minimum requirements A candidate level becomes a validated pool only if all three conditions are met simultaneously. 
+Failing any one condition = not a pool. ValidateCandidatePool — three simultaneous conditions valid = (touch_count 
+&gt;= MIN_TOUCHES)
+ AND (vol_at_level &gt;= MIN_VOLUME_PERCENTILE)
+ AND (departure_strength &gt; 0) Where: MIN_TOUCHES = 3 — minimum number of candle interactions with the level within 
+the validation window validation_window = 100 candles back from current position (does not need to be consecutive) 
+MIN_VOLUME_PERCENTILE = 50th percentile — level must be in the top half of all levels by volume traded at price 
+departure_strength &gt; 0 = at least one departure candle must be detectable (any ERC, NRC, or gap-away) — a level 
+with only DOJI departures does not qualify touch_count = count of candles whose high (resistance) or low (support) 
+entered the candidate zone boundaries ⚠ The 3-touch minimum counts only touches within the 100-candle validation 
+window, NOT the full historical record. A level that had 10 touches 500 candles ago but only 1 touch in the last 100 
+candles fails validation. Recency matters. 10.5 SetPoolBoundaries — handling outlier wicks Multiple wicks at the same 
+level will have different depths. A single anomalous wick that touched the level during a news event should not define 
+the zone boundary. Zenny uses a percentile method to set boundaries. SetPoolBoundaries — 90th percentile wick method 
+pool.wick_high = percentile_90(all wick_highs at level) [for resistance]
+pool.wick_low = percentile_10(all wick_lows at level) [for support]
+pool.centre_line = percentile_50(all (open+close)/2 at level) Where: percentile_90(x) = the value below which 90% of 
+the values fall — excludes top 10% outlier wicks percentile_10(x) = the value above which 90% of the values fall — 
+excludes bottom 10% outlier wicks percentile_50(x) = the median body midpoint — robust against outliers rationale = 
+using 90th percentile instead of max() prevents a single news spike wick from pushing the zone boundary to an 
+unrealistic level minimum zone width = 0.5% of current price. If calculated width &lt; 0.5%, expand symmetrically 
+around centre_line until width = 0.5%. maximum zone width = 1.5% of current price. If calculated width &gt; 1.5%, flag 
+pool for manual review and cap at 1.5%. 10.6 Two-level merge rule — when nearby levels combine Merge decision — two 
+active pools at similar prices merge = abs(pool_A.centre - pool_B.centre) / pool_A.centre ≤ MERGE_TOLERANCE
+ AND pool_A.type == pool_B.type Where: MERGE_TOLERANCE = 0.005 (0.5%) — same as ClusterPriceLevels tolerance for 
+consistency same type required = a resistance pool and a support pool at similar prices do NOT merge — they may 
+represent a contested zone and both are kept merged pool score = AggregatePoolScore calculated fresh on the merged 
+boundaries merged pool boundaries = wick_high = max(pool_A.wick_high, pool_B.wick_high), wick_low = 
+min(pool_A.wick_low, pool_B.wick_low) touch_count = sum of both pools touch counts birth_candle = earlier of the two 
+birth candles ⚠ If two pools of the same type are within 0.5% but their merged width would exceed 1.5%, they do NOT 
+merge. Both are kept as separate pools. The developer must check merged width before executing the merge. 11 Fibonacci 
+Extension Calculation — Price Discovery 11.1 When this applies Fibonacci extensions are used exclusively when 
+current_price &gt; all_time_high. At that point there are no historical pool boundaries above. Extensions provide 
+synthetic pool levels based on the most recent significant swing. ⚠ ATH confirmation rule: all_time_high is confirmed 
+when the current candle close exceeds the highest close in the entire available historical dataset (minimum 365 days of 
+daily data required). Wicks alone do not confirm ATH — body close must exceed prior highest close. 11.2 Anchor point 
+identification Research establishes that Fibonacci extensions require three anchor points: Point A (impulse start), 
+Point B (impulse end), Point C (retracement end). Zenny identifies these algorithmically. Anchor point identification 
+for price discovery extensions Point_A = most_recent_swing_low on Daily timeframe within last 365 days
+Point_B = all_time_high price (confirmed by body close)
+Point_C = most_recent_swing_low AFTER Point_B on Daily timeframe Where: Point_A = the lowest swing low on the daily 
+chart in the prior 365 days — this is the base of the impulse move Point_B = the all-time-high close price Point_C = 
+the deepest pullback after Point_B before price resumed upward — if no pullback has yet occurred, Point_C = Point_B 
+(extension levels project from the ATH itself) timeframe = always Daily for ATH Fibonacci extensions regardless of 
+active trading timeframe swing_low detection = same FindLocalExtrema algorithm, N=5 on Daily candles 11.3 Extension 
+level formula ApplyFibonacciExtensions — bullish extension levels above ATH AB_range = Point_B - Point_A
+extension_level[ratio] = Point_C + (AB_range × ratio) Where: AB_range = the full distance of the impulse move from 
+base to ATH ratio = Fibonacci extension ratios: 1.618, 2.618, 3.618, 4.236 Point_C = if no pullback: Point_C = Point_B, 
+so extension_level = Point_B + (AB_range × ratio) extension_level[1.618] = the golden ratio extension — primary 
+target, research-confirmed most reliable extension_level[2.618] = secondary target — relevant in strong trending 
+markets extension_level[3.618] = tertiary target — rarely reached extension_level[4.236] = extreme extension — used 
+in exceptional breakouts only // Fibonacci extension calculation — worked example // BTC scenario: Point_A = $20,000, 
+Point_B = $69,000 (ATH), Point_C = $55,000 AB_range = 69000 - 20000 = 49000 extension_level[1.618] = 55000 + (49000 × 
+1.618) = 55000 + 79282 = $134,282 extension_level[2.618] = 55000 + (49000 × 2.618) = 55000 + 128282 = $183,282 
+extension_level[3.618] = 55000 + (49000 × 3.618) = 55000 + 177282 = $232,282 extension_level[4.236] = 55000 + (49000 
+× 4.236) = 55000 + 207564 = $262,564 // Each extension level becomes a synthetic pool // Zone width = 0.5% of the 
+extension price (minimum zone width rule) // Type = RESISTANCE (price approaching from below) // S_depart = 0 (no 
+historical departure data — noted in pool log) // S_fresh = 25 (untouched — these levels are always fresh) // S_vol 
+= 0 (no historical volume — extension levels get no volume score) Synthetic pool construction at extension level 
+pool.centre_line = extension_level[ratio]
+pool.wick_high = extension_level[ratio] × 1.005
+pool.wick_low = extension_level[ratio] × 0.995
+pool.type = RESISTANCE
+pool.S_effective = S_fresh + S_liq (volume and departure scores = 0 for synthetic pools) Where: × 1.005 / × 0.995 = 
+0.5% above and below extension level — minimum zone width applied symmetrically S_effective cap = synthetic pools 
+cannot score above 30 unless Coinglass liquidation cluster is present at that level purpose = provides a destination 
+for the upper arm of the Braid during price discovery — without this, the upper panel has no pool to draw 12 Polarity 
+Flip Score — Precise Definition ApplyPolarityFlip — exact score on flip flipped_pool.score = max(40, S_at_peak × 
+0.4) Where: S_at_peak = the HIGHEST score the pool achieved during its entire active lifetime, not the score at birth 
+and not the score at death rationale = a pool that scored 95 at its peak but degraded to 45 at death was a strong pool. 
+Its polarity-flipped role should reflect its peak strength, not its depleted final state. max(40, x) = minimum score of 
+40 — even a weak pool (S_at_peak = 60) gets 40 × 0.4 = 24, floored to 40 example 1 = pool peaked at 92: flipped 
+score = max(40, 92 × 0.4) = max(40, 36.8) = 40 example 2 = pool peaked at 105: flipped score = max(40, 105 × 0.4) = 
+max(40, 42) = 42 touch_count reset = always 0 on flip — the flipped pool is treated as freshly born in its new role 
+S_fresh reset = 25 (untouched) — freshness clock restarts from flip event cannot flip again = a pool that has flipped 
+once and then dies = inactive permanently, no second flip ⚠ S_at_peak must be tracked throughout the pool lifecycle. 
+Every time AggregatePoolScore is recalculated, check if new score &gt; current S_at_peak and update. S_at_peak is a 
+separate stored field, not derived at flip time. 13 Timeframe Alignment — Canonical Pool Price 13.1 The problem Three 
+timeframes may each show a pool at slightly different prices: 1H pool at $64,750, 4H pool at $64,820, Daily pool at 
+$64,680. All within 0.5% of each other. They are the same level. But which price becomes the canonical centre_line 
+shown on the Braid? 13.2 Resolution rule AlignPoolsAcrossTimeframes — canonical price determination canonical_centre 
+= volume_weighted_mean(aligned_pool_centres) Where: aligned_pool_centres = all pool centre prices from different 
+timeframes that are within 0.5% of each other weight for each TF pool = total volume at that pool level on that 
+timeframe over last 200 candles on that TF result = the level with the most volume traded at it wins the most influence 
+over the canonical price canonical_boundaries = wick_high = max(all wick_highs), wick_low = min(all wick_lows) across 
+all aligned pools score = AggregatePoolScore calculated fresh using the canonical boundaries S_tf = always = 10 for a 
+pool visible on 3+ timeframes (maximum confluence score) // Example: Three aligned pools // 1H pool: centre=$64,750, 
+vol_200=1,240 BTC // 4H pool: centre=$64,820, vol_200=3,100 BTC // Daily pool: centre=$64,680, vol_200=5,800 BTC 
+total_vol = 1240 + 3100 + 5800 = 10140 canonical_centre = (64750×1240 + 64820×3100 + 64680×5800) / 10140 
+canonical_centre = (80,290,000 + 200,942,000 + 375,144,000) / 10140 canonical_centre = 656,376,000 / 10140 
+canonical_centre = $64,732 // Daily pool dominates due to highest volume // This price is what the centre_line shows on 
+the Braid. // The 4H at $64,820 was outweighed by the high-volume Daily pool. 14 CVD Divergence Detection — Precise 
+Rules 14.1 CVD formula CalculateCumulativeVolumeDelta — running sum per session CVD[t] = CVD[t-1] + (buy_volume[t] - 
+sell_volume[t]) Where: buy_volume[t] = volume of aggressive market buy orders in candle t (trades that hit the ask) 
+sell_volume[t] = volume of aggressive market sell orders in candle t (trades that hit the bid) CVD[session_open] = 
+reset to 0 at each session open (00:00 UTC for crypto 24/7) session reset = CVD resets at 00:00 UTC daily for crypto 
+markets (no exchange close) source = Binance trade stream: side = &quot;BUY&quot; means buyer was aggressor (market 
+buy) 14.2 Divergence detection rules CVD Bearish Divergence — price makes higher high, CVD does not bearish_div = 
+(close[0] &gt; swing_high_prev)
+ AND (CVD[0] &lt; CVD_at_swing_high_prev)
+ AND (lookback_window &lt;= DIV_LOOKBACK) Where: swing_high_prev = the most recent swing high on the trading timeframe 
+(using FindLocalExtrema, N=5) CVD_at_swing_high_prev = the CVD value at the candle index of swing_high_prev 
+DIV_LOOKBACK = 20 candles — divergence only valid if the two comparison points are within 20 candles of each other 
+close[0] = current candle close result = bearish divergence flag fires when all three conditions met simultaneously CVD 
+Bullish Divergence — price makes lower low, CVD does not bullish_div = (close[0] &lt; swing_low_prev)
+ AND (CVD[0] &gt; CVD_at_swing_low_prev)
+ AND (lookback_window &lt;= DIV_LOOKBACK) Where: swing_low_prev = the most recent swing low on the trading timeframe 
+CVD_at_swing_low_prev = the CVD value at the candle index of swing_low_prev DIV_LOOKBACK = 20 candles — same lookback 
+as bearish divergence result = bullish divergence flag fires when all three conditions met simultaneously ⚠ CVD 
+divergence is a WARNING signal, not a trade entry signal. It is logged as a pool scoring modifier and shown on the 
+Braid as an amber annotation. It does NOT block or trigger trades independently. A divergence near a pool boundary 
+increases pool conviction. A divergence against a pool direction is logged as a caution. // CVD divergence — effect 
+on pool scoring // If CVD bearish divergence detected AND price at resistance pool: // → Add +3 to S_effective 
+(divergence confirms pool resistance) // If CVD bullish divergence detected AND price at support pool: // → Add +3 to 
+S_effective (divergence confirms pool support) // If CVD bullish divergence detected AND price at resistance pool: // 
+→ Log as CAUTION: &quot;CVD contradicts pool type&quot; // → Subtract -2 from S_effective // Maximum total CVD 
+adjustment: +3 or -2 // This adjustment is applied after AggregatePoolScore, before ValidatePoolThreshold 15 Gap Width 
+Formula — Visual Velocity Encoding 15.1 What the gap represents The gap between the upper and lower panels on the 
+right side of the Braid is not empty space — it encodes the approach velocity toward the dominant pool. A wide gap = 
+price trending strongly toward the dominant pool. A narrow gap = price accumulating, slow approach. 15.2 Gap width 
+calculation GapIndicator — pixel height of gap between upper and lower panels gap_pct = 
+clamp(approach_velocity[dominant_pool] / MAX_VELOCITY, MIN_GAP_PCT, MAX_GAP_PCT)
+gap_px = total_right_panel_height_px × gap_pct Where: approach_velocity[dominant_pool] = velocity toward the dominant 
+pool in %/candle (from MeasureApproachVelocity) MAX_VELOCITY = 0.50 %/candle — at this velocity or above, gap is at 
+maximum width MIN_GAP_PCT = 0.05 (5% of right panel height) — minimum gap, never zero, ensures both panels are always 
+visible MAX_GAP_PCT = 0.40 (40% of right panel height) — maximum gap, prevents one panel from being squeezed to 
+nothing clamp(x, min, max) = constrains x to [min, max] range total_right_panel_height_px = canvas height minus axis 
+labels — the full usable vertical space on the right side // Gap width examples const MAX_VELOCITY = 0.50 // %/candle 
+const MIN_GAP_PCT = 0.05 const MAX_GAP_PCT = 0.40 // Scenario 1: Strong trend — velocity = 0.38 %/candle gap_pct = 
+clamp(0.38 / 0.50, 0.05, 0.40) gap_pct = clamp(0.76, 0.05, 0.40) = 0.40 // hits maximum // → Wide gap. &quot;Trending 
+— high velocity&quot; label. // Scenario 2: Accumulation — velocity = 0.08 %/candle gap_pct = clamp(0.08 / 0.50, 
+0.05, 0.40) gap_pct = clamp(0.16, 0.05, 0.40) = 0.16 // → Narrow-ish gap. &quot;Ranging — moderate velocity&quot; 
+label. // Scenario 3: Price moving away — velocity = -0.05 (AWAY direction) // Use abs(velocity) but cap at 
+MIN_GAP_PCT gap_pct = MIN_GAP_PCT = 0.05 // → Minimum gap. &quot;Accumulation — low velocity&quot; label. // Gap 
+label thresholds: // gap_pct &lt;= 0.10: &quot;Accumulation — low velocity&quot; // gap_pct 0.10-0.25: &quot;Ranging 
+— moderate velocity&quot; // gap_pct &gt; 0.25: &quot;Trending — high velocity&quot; 16 Session Filter — Precise 
+UTC Times 16.1 Research-confirmed session boundaries Crypto markets run 24/7 but liquidity is not uniform. The 
+established trading sessions from forex market structure define when institutional participation is highest. Research 
+confirms London and New York sessions produce the majority of directional moves. Session Open (UTC) Close (UTC) Overlap 
+with Quality for Zenny Asian (Tokyo) 00:00 09:00 None / Sydney end LOW — thin liquidity for BTC, small moves, avoid 
+London 08:00 17:00 New York 13:00–17:00 HIGH — primary session, largest directional moves London-NY Overlap 13:00 
+17:00 Both active HIGHEST — maximum liquidity and volatility New York 13:00 22:00 London open until 17:00 HIGH — 
+second primary session NY-Asia Dead Zone 22:00 00:00 None LOWEST — avoid entirely, thin and erratic Weekend (Sat-Sun) 
+— — — BLOCKED — no trading permitted, pools still tracked ⚠ UTC times are fixed. They do not adjust for 
+daylight saving time (DST). When London or New York enter DST, their local clock shifts but the UTC boundaries in Zenny 
+remain constant. The system operates on UTC only. 16.2 Session active rule DetectSessionFilter — session_active 
+determination session_active = current_utc_time IN UNION(configured_active_sessions)
+AND day_of_week NOT IN [Saturday, Sunday] Where: configured_active_sessions = default = London (08:00–17:00 UTC) + 
+New York (13:00–22:00 UTC) UNION = session_active if current time is in London OR New York or both effective active 
+window = 08:00–22:00 UTC Monday–Friday effective blocked window = 22:00–08:00 UTC, and all weekend trades blocked 
+when = session_active = false — logged as SKIPPED with reason SESSION_FILTER pools still tracked = pool scoring, tick 
+clustering, and Braid updates continue 24/7 regardless of session_active ⚠ Pools are tracked continuously even during 
+blocked sessions. The session filter only blocks trade execution. The Braid updates, pools are born and die, and scores 
+change at all hours. Only the trade execution layer is gated by session_active. 17 Funding Rate Bias — Integration 
+with Position Sizing 17.1 What funding rate measures On perpetual futures, the funding rate is the periodic payment 
+between long and short holders. Extreme positive funding means longs are paying shorts — too many longs, market is 
+crowded long. Extreme negative means shorts are paying longs — too many shorts, market is crowded short. Both 
+extremes are contrarian signals. 17.2 Bias determination CheckFundingRateBias — thresholds and bias assignment bias = 
+SHORT if funding_rate &gt; +0.05%
+bias = LONG if funding_rate &lt; -0.05%
+bias = NEUTRAL otherwise Where: funding_rate = 8-hour funding rate from Binance futures /fapi/v1/fundingRate, expressed 
+as percentage +0.05% threshold = research-confirmed: above this level longs are significantly overcrowded, contrarian 
+short bias warranted -0.05% threshold = below this level shorts are overcrowded, contrarian long bias warranted source 
+= Binance perpetual futures funding rate, updated every 8 hours NEUTRAL range = -0.05% to +0.05% — no adjustment 
+applied 17.3 Effect on position sizing Funding rate modifier applied to CalculatePositionSize funding_modifier = 
+lookup(bias, trade_direction) bias trade_direction funding_modifier Rationale SHORT SHORT 1.15 Trade aligned with 
+contrarian signal — slight size increase SHORT LONG 0.70 Trade against contrarian signal — significant size 
+reduction LONG LONG 1.15 Trade aligned with contrarian signal — slight size increase LONG SHORT 0.70 Trade against 
+contrarian signal — significant size reduction NEUTRAL Either 1.00 No adjustment ⚠ The funding_modifier is applied 
+AFTER all other modifiers in CalculatePositionSize and BEFORE the cap/floor enforcement. The cap and floor always have 
+final authority. A funding_modifier of 1.15 on an already-large position cannot breach the 5% cap. Full updated 
+position size formula with funding modifier: CalculatePositionSize — complete formula including funding size_usd = 
+account_balance × base_risk_pct × score_modifier × type_modifier × regime_modifier × funding_modifier Where: 
+funding_modifier = from table above: 1.15, 1.00, or 0.70 order of application = all five modifiers multiply together, 
+then cap/floor applied example = account=$100K, risk=1%, score=0.88, TYPE1=1.0, TRENDING=1.0, 
+SHORT_bias_SHORT_trade=1.15: size = $100K × 0.01 × 0.88 × 1.0 × 1.0 × 1.15 = $1,012 cap check = $1,012 &lt; $5,000 
+cap → no cap applied. Position proceeds. 18 Absorption Detection — Precise Formula 18.1 What absorption is 
+Absorption occurs when aggressive market orders are met by a large wall of passive limit orders, causing price to stall 
+despite high volume. The research definition: high volume traded at a level with minimal resulting price movement. This 
+is the clearest institutional signal available in order flow data. 18.2 Absorption detection formula DetectAbsorption 
+— two simultaneous conditions absorbed = (volume_at_level &gt;= ABSORPTION_VOLUME_THRESHOLD)
+ AND (price_movement_pct &lt;= ABSORPTION_PRICE_THRESHOLD) Where: volume_at_level = total volume traded within the 
+price bucket in the current candle period ABSORPTION_VOLUME_THRESHOLD = volume_at_level must exceed 300% of the rolling 
+20-candle average volume at that bucket 300% (3×) threshold = research-confirmed: order flow imbalance threshold of 
+300% (3× normal) is the standard for detecting institutional-size absorption price_movement_pct = abs(candle.close - 
+candle.open) / candle.open × 100 ABSORPTION_PRICE_THRESHOLD = 0.10% — price moved less than 0.10% despite the high 
+volume at this level rationale = 0.10% is approximately 1/10th of the average ATR-normalised bar range for BTC on 1H 
+— a very small move confirming price stalled Rolling 20-candle average volume at bucket avg_vol_20[bucket] = 
+rolling_mean(volume_at_level[bucket], window=20) Where: window = 20 candles — standard short-term volume baseline per 
+bucket ABSORPTION_VOLUME_THRESHOLD value = avg_vol_20[bucket] × 3.0 note = each price bucket has its own rolling 
+average. The threshold adapts to each level individually. // Absorption detection — implementation const 
+ABSORPTION_PRICE_THRESHOLD = 0.001 // 0.10% const ABSORPTION_VOLUME_MULTIPLIER = 3.0 // 300% = 3× normal function 
+detectAbsorption(bucket, candle, rolling_avg_vol) { const vol = bucket.volume_this_candle const price_move_pct = 
+Math.abs(candle.close - candle.open) / candle.open const volume_threshold = rolling_avg_vol[bucket.centre] * 
+ABSORPTION_VOLUME_MULTIPLIER const high_volume = vol &gt;= volume_threshold const minimal_movement = price_move_pct 
+&lt;= ABSORPTION_PRICE_THRESHOLD if (high_volume &amp;&amp; minimal_movement) { // Determine absorption side from delta 
+const side = (bucket.buy_volume &gt; bucket.sell_volume) ? &quot;BUY_ABS&quot; : &quot;SELL_ABS&quot; const strength = 
+vol / volume_threshold // how many times above threshold return { absorbed: true, side, strength } } return { absorbed: 
+false } } // Absorption effect on pool scoring: // BUY_ABS at support pool: +3 to S_effective (buyers defending level) 
+// SELL_ABS at resistance pool: +3 to S_effective (sellers defending level) // BUY_ABS at resistance pool: log CAUTION 
+— buyers trying to break resistance // SELL_ABS at support pool: log CAUTION — sellers trying to break support // 
+Maximum absorption adjustment: +3 per absorption event, max +6 per candle (2 events) End of Zenny Mathematical &amp; 
+Calculation Specification — Document 5B — v1.0 — April 2026 

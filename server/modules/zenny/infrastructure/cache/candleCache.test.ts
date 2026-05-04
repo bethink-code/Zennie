@@ -54,8 +54,16 @@ describe("CandleCache", () => {
     const cache = new CandleCache();
     const candles = [mkCandle(1, 100), mkCandle(2, 110), mkCandle(3, 120)];
     cache.write("BTCUSDT", "D", candles);
-    const read = cache.read("BTCUSDT", "D", 3);
+    const read = cache.read("BTCUSDT", "D", 3, Date.now());
     expect(read).toEqual(candles);
+  });
+
+  it("expires cached candles after the TTL", () => {
+    const cache = new CandleCache();
+    cache.write("BTCUSDT", "D", [mkCandle(1, 100)]);
+    const writtenAt = Date.now();
+    expect(cache.read("BTCUSDT", "D", 1, writtenAt)).not.toBeNull();
+    expect(cache.read("BTCUSDT", "D", 1, writtenAt + 31_000)).toBeNull();
   });
 
   it("returns null when fewer cached than requested", () => {

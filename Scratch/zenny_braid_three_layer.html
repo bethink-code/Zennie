@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+* { box-sizing:border-box; margin:0; padding:0; font-family:system-ui,sans-serif; }
+body { background:#f8f7f4; color:#3d3d3a; }
+.header { padding:12px 16px 0; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+.layer-tabs { display:flex; gap:6px; }
+.ltab { padding:5px 12px; border-radius:8px; border:0.5px solid rgba(0,0,0,0.15); background:#f1efe8; font-size:11px; cursor:pointer; color:#73726c; transition:all .12s; }
+.ltab.active { background:#fff; border-color:rgba(0,0,0,0.3); color:#3d3d3a; font-weight:500; }
+.data-tags { display:flex; gap:5px; flex-wrap:wrap; }
+.dtag { font-size:10px; padding:2px 7px; border-radius:10px; border:0.5px solid rgba(0,0,0,0.12); color:#888780; }
+.chart-area { position:relative; }
+canvas { display:block; width:100%; }
+.layer-label { position:absolute; top:0; font-size:10px; font-weight:500; padding:3px 8px; border-radius:0 0 6px 0; }
+.legend { padding:8px 16px 12px; display:flex; gap:14px; flex-wrap:wrap; font-size:11px; color:#73726c; align-items:center; }
+.li { display:flex; align-items:center; gap:5px; }
+.lsq { width:14px; height:5px; border-radius:2px; flex-shrink:0; }
+.lci { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.lrect { width:14px; height:10px; border-radius:2px; flex-shrink:0; border:1.5px solid; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="layer-tabs">
+    <div class="ltab active" onclick="setLayer('all')">Full view</div>
+    <div class="ltab" onclick="setLayer('landscape')">Landscape</div>
+    <div class="ltab" onclick="setLayer('trading')">Trading</div>
+    <div class="ltab" onclick="setLayer('execution')">Execution</div>
+  </div>
+  <div class="data-tags">
+    <span class="dtag">Binance OHLCV</span>
+    <span class="dtag">Binance depth</span>
+    <span class="dtag">Coinglass</span>
+    <span class="dtag">Zenny log</span>
+  </div>
+</div>
+
+<div class="chart-area">
+  <canvas id="c" height="520"></canvas>
+</div>
+
+<div class="legend">
+  <div class="li"><div class="lrect" style="background:rgba(226,75,74,0.12);border-color:rgba(226,75,74,0.6)"></div>Resistance pool</div>
+  <div class="li"><div class="lrect" style="background:rgba(29,158,117,0.12);border-color:rgba(29,158,117,0.6)"></div>Support pool</div>
+  <div class="li"><div class="lrect" style="background:rgba(226,75,74,0.06);border-color:rgba(226,75,74,0.25);border-style:dashed"></div>4H landscape</div>
+  <div class="li"><div class="lrect" style="background:rgba(29,158,117,0.06);border-color:rgba(29,158,117,0.25);border-style:dashed"></div>Daily landscape</div>
+  <div class="li"><div class="lci" style="background:#1D9E75"></div>Taken</div>
+  <div class="li"><div class="lci" style="background:#E24B4A"></div>Missed</div>
+  <div class="li"><div class="lci" style="background:#EF9F27"></div>Skipped</div>
+  <div class="li" style="margin-left:auto;font-size:10px;color:#888780">Pool birth ▶ · Pool death ✕</div>
+</div>
+
+<script>
+const C = {
+  bg:         '#f8f7f4',
+  grid:       'rgba(0,0,0,0.035)',
+  txt:        '#888780',
+  txtP:       '#3d3d3a',
+  bodyUp:     'rgba(29,158,117,0.88)',
+  bodyDn:     'rgba(226,75,74,0.88)',
+  wickUp:     'rgba(29,158,117,0.5)',
+  wickDn:     'rgba(226,75,74,0.5)',
+  ghostBody:  'rgba(61,61,58,0.07)',
+  ghostWick:  'rgba(61,61,58,0.18)',
+  ghostBdr:   'rgba(61,61,58,0.28)',
+  res:        'rgba(226,75,74,0.13)',
+  resBdr:     'rgba(226,75,74,0.65)',
+  sup:        'rgba(29,158,117,0.13)',
+  supBdr:     'rgba(29,158,117,0.65)',
+  res4H:      'rgba(226,75,74,0.05)',
+  res4HBdr:   'rgba(226,75,74,0.22)',
+  sup4H:      'rgba(29,158,117,0.05)',
+  sup4HBdr:   'rgba(29,158,117,0.22)',
+  resDly:     'rgba(226,75,74,0.04)',
+  resDlyBdr:  'rgba(226,75,74,0.18)',
+  supDly:     'rgba(29,158,117,0.04)',
+  supDlyBdr:  'rgba(29,158,117,0.18)',
+  armAbove:   '#7F77DD',
+  armBelow:   '#1D9E75',
+  taken:      '#1D9E75',
+  missed:     '#E24B4A',
+  skipped:    '#EF9F27',
+  nowLine:    'rgba(61,61,58,0.45)',
+  gap:        'rgba(244,242,237,0.97)',
+  exec:       'rgba(239,159,39,0.12)',
+  execBdr:    'rgba(239,159,39,0.6)',
+  wire:       'rgba(61,61,58,0.8)',
+  wireGlow:   'rgba(61,61,58,0.06)',
+};
+
+let activeLayer = 'all';
+
+function rng(seed){ let s=seed; return ()=>{ s=(s*16807)%2147483647; return (s-1)/2147483646; }; }
+function smooth(arr,n=2){ let a=[...arr]; for(let k=0;k<n;k++) a=a.map((v,i)=>i===0||i===a.length-1?v:(a[i-1]+v+a[i+1])/3); return a; }
+
+function genCandles(n,start,seed){
+  const r=rng(seed); const candles=[]; let p=start;
+  for(let i=0;i<n;i++){
+    const prog=i/n;
+    const trend=12*(1+prog*1.8);
+    const move=(r()-0.44)*220+trend;
+    const o=p, c=p+move;
+    const range=80+r()*260;
+    const wU=r()>0.82?2.8+r()*1.5:0.5+r()*0.9;
+    const wD=r()>0.82?2.8+r()*1.5:0.5+r()*0.9;
+    const h=Math.max(o,c)+r()*range*wU;
+    const l=Math.min(o,c)-r()*range*wD;
+    candles.push({o,h,l,c}); p=c;
+  }
+  return candles;
+}
+
+function drawCandle(ctx,x,hw,yO,yC,yH,yL,isUp,ghost){
+  if(ghost){
+    ctx.strokeStyle=C.ghostWick; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x,yH); ctx.lineTo(x,Math.min(yO,yC)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,Math.max(yO,yC)); ctx.lineTo(x,yL); ctx.stroke();
+    const bT=Math.min(yO,yC), bH=Math.max(2,Math.abs(yC-yO));
+    ctx.fillStyle=C.ghostBody; ctx.fillRect(x-hw,bT,hw*2,bH);
+    ctx.strokeStyle=C.ghostBdr; ctx.lineWidth=0.8; ctx.strokeRect(x-hw,bT,hw*2,bH);
+  } else {
+    ctx.strokeStyle=isUp?C.wickUp:C.wickDn; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x,yH); ctx.lineTo(x,Math.min(yO,yC)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,Math.max(yO,yC)); ctx.lineTo(x,yL); ctx.stroke();
+    const bT=Math.min(yO,yC), bH=Math.max(1.5,Math.abs(yC-yO));
+    ctx.fillStyle=isUp?C.bodyUp:C.bodyDn;
+    ctx.fillRect(x-hw,bT,hw*2,bH);
+  }
+}
+
+function drawRect(ctx,x1,x2,yTop,yBot,fill,border,dash,lineW){
+  ctx.fillStyle=fill;
+  ctx.fillRect(x1,yTop,x2-x1,yBot-yTop);
+  ctx.strokeStyle=border; ctx.lineWidth=lineW||0.8;
+  if(dash) ctx.setLineDash([5,4]); else ctx.setLineDash([]);
+  ctx.strokeRect(x1,yTop,x2-x1,yBot-yTop);
+  ctx.setLineDash([]);
+}
+
+function drawBirthDeath(ctx,x,y,type,color){
+  ctx.fillStyle=color; ctx.font=`bold 10px system-ui`; ctx.textAlign='center';
+  ctx.fillText(type==='birth'?'▶':'✕',x,y);
+}
+
+function setLayer(l){
+  activeLayer=l;
+  document.querySelectorAll('.ltab').forEach((b,i)=>b.classList.toggle('active',['all','landscape','trading','execution'][i]===l));
+  draw();
+}
+
+function draw(){
+  const cv=document.getElementById('c');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.parentElement.clientWidth;
+  const H=parseInt(cv.getAttribute('height'));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');
+  ctx.scale(dpr,dpr);
+
+  const pad={l:58,r:16,t:20,b:32};
+  const cw=W-pad.l-pad.r;
+  const ch=H-pad.t-pad.b;
+  const NOW_FRAC=0.62;
+  const nowX=pad.l+NOW_FRAC*cw;
+  const pastW=NOW_FRAC*cw;
+  const futureW=cw*(1-NOW_FRAC);
+
+  const N=46;
+  const candles=genCandles(N,61200,42);
+
+  // Force wick clusters at key zone levels
+  const wickTargets=[
+    {i:5,  p:64800,d:'h'},{i:11,p:64800,d:'h'},
+    {i:18, p:61300,d:'l'},{i:24,p:61300,d:'l'},
+    {i:30, p:64800,d:'h'},{i:37,p:63100,d:'h'},
+    {i:43, p:61300,d:'l'},
+  ];
+  for(const w of wickTargets){
+    const c=candles[w.i]; if(!c) continue;
+    if(w.d==='h') c.h=Math.max(c.h,w.p+50+Math.random()*160);
+    else c.l=Math.min(c.l,w.p-50-Math.random()*160);
+  }
+
+  const lastC=candles[N-1];
+  const allP=candles.flatMap(c=>[c.h,c.l]);
+  let minP=Math.min(...allP)-400, maxP=Math.max(...allP)+700;
+  const pRange=maxP-minP;
+  const toY=p=>pad.t+ch-((p-minP)/pRange)*ch;
+  const cW=Math.max(3,Math.floor(pastW/N)-2);
+  const toX=i=>pad.l+((i+0.5)/N)*pastW;
+  const hw=Math.max(1,cW/2-1);
+
+  ctx.fillStyle=C.bg; ctx.fillRect(0,0,W,H);
+
+  // Grid
+  ctx.strokeStyle=C.grid; ctx.lineWidth=0.5;
+  for(let g=0;g<=5;g++){
+    const gy=pad.t+(g/5)*ch;
+    ctx.beginPath(); ctx.moveTo(pad.l,gy); ctx.lineTo(pad.l+cw,gy); ctx.stroke();
+  }
+
+  const showLandscape = activeLayer==='all'||activeLayer==='landscape';
+  const showTrading   = activeLayer==='all'||activeLayer==='trading';
+  const showExecution = activeLayer==='all'||activeLayer==='execution';
+
+  // ═══════════════════════════════════════
+  // LAYER 1: LANDSCAPE — Daily + 4H pools
+  // Wide, prominent, permanent backdrop
+  // ═══════════════════════════════════════
+  if(showLandscape){
+    // Daily pools — widest, most prominent
+    const dailyPools=[
+      {p:65200,band:600,type:'res',label:'Daily $65.2K'},
+      {p:60800,band:560,type:'sup',label:'Daily $60.8K'},
+    ];
+    for(const dp of dailyPools){
+      const yC=toY(dp.p), bPx=(dp.band/pRange)*ch;
+      drawRect(ctx,pad.l,pad.l+cw,yC-bPx/2,yC+bPx/2,
+        dp.type==='res'?C.resDly:C.supDly,
+        dp.type==='res'?C.resDlyBdr:C.supDlyBdr,true,0.8);
+      ctx.fillStyle=dp.type==='res'?'rgba(162,45,45,0.5)':'rgba(15,110,86,0.5)';
+      ctx.font=`400 9px system-ui`; ctx.textAlign='left';
+      ctx.fillText(dp.label,pad.l+3,yC-bPx/2-3);
+    }
+
+    // 4H pools — medium prominence
+    const fourHPools=[
+      {p:64800,band:380,type:'res',label:'4H $64.8K',birthI:3, deathI:null},
+      {p:63100,band:220,type:'res',label:'4H $63.1K',birthI:28,deathI:39},
+      {p:62300,band:240,type:'sup',label:'4H $62.3K',birthI:15,deathI:null},
+      {p:61300,band:340,type:'sup',label:'4H $61.3K',birthI:8, deathI:null},
+    ];
+    for(const fp of fourHPools){
+      const yC=toY(fp.p), bPx=(fp.band/pRange)*ch;
+      const x1=fp.birthI!==null?toX(fp.birthI):pad.l;
+      const x2=fp.deathI!==null?toX(fp.deathI):nowX;
+      drawRect(ctx,x1,x2,yC-bPx/2,yC+bPx/2,
+        fp.type==='res'?C.res4H:C.sup4H,
+        fp.type==='res'?C.res4HBdr:C.sup4HBdr,true,0.8);
+
+      // Birth marker
+      if(fp.birthI!==null){
+        drawBirthDeath(ctx,toX(fp.birthI),yC-bPx/2-5,'birth',
+          fp.type==='res'?'rgba(162,45,45,0.5)':'rgba(15,110,86,0.5)');
+      }
+      // Death marker
+      if(fp.deathI!==null){
+        drawBirthDeath(ctx,toX(fp.deathI),yC+bPx/2+10,'death',
+          fp.type==='res'?'rgba(162,45,45,0.6)':'rgba(15,110,86,0.6)');
+      }
+
+      ctx.fillStyle=fp.type==='res'?'rgba(162,45,45,0.6)':'rgba(15,110,86,0.6)';
+      ctx.font=`400 9px system-ui`; ctx.textAlign='right';
+      ctx.fillText(fp.label,pad.l-4,yC+3.5);
+    }
+  }
+
+  // ═══════════════════════════════════════
+  // LAYER 2: TRADING — 1H pools + wire
+  // The main Braid view
+  // ═══════════════════════════════════════
+  if(showTrading){
+    // 1H trading pools — precise rectangles from wick extremes
+    const tradingPools=[
+      {p:64800,wickHigh:65120,wickLow:64520,type:'res',rich:0.92,birthI:5, deathI:null,
+       label:'$64.8K',active:true,liq:true},
+      {p:63100,wickHigh:63380,wickLow:62860,type:'res',rich:0.40,birthI:28,deathI:39,
+       label:'$63.1K',active:false},
+      {p:61300,wickHigh:61580,wickLow:60980,type:'sup',rich:0.84,birthI:8, deathI:null,
+       label:'$61.3K',active:true},
+    ];
+
+    for(const tp of tradingPools){
+      const yTop=toY(tp.wickHigh);
+      const yBot=toY(tp.wickLow);
+      const yCentre=toY(tp.p);
+      const x1=tp.birthI!==null?toX(tp.birthI):pad.l;
+      const x2=tp.deathI!==null?toX(tp.deathI):nowX;
+
+      // Rectangle — bounded by actual wick extremes
+      drawRect(ctx,x1,x2,yTop,yBot,
+        tp.type==='res'?C.res:C.sup,
+        tp.type==='res'?C.resBdr:C.supBdr,
+        false,tp.rich*1.6);
+
+      // Centre line — the level itself
+      ctx.strokeStyle=tp.type==='res'
+        ?`rgba(226,75,74,${0.2+tp.rich*0.5})`
+        :`rgba(29,158,117,${0.2+tp.rich*0.5})`;
+      ctx.lineWidth=tp.rich*1.4; ctx.setLineDash([6,4]);
+      ctx.beginPath(); ctx.moveTo(x1,yCentre); ctx.lineTo(x2,yCentre); ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Birth marker
+      if(tp.birthI!==null){
+        const bx=toX(tp.birthI);
+        ctx.strokeStyle=tp.type==='res'?C.resBdr:C.supBdr; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(bx,yTop); ctx.lineTo(bx,yBot); ctx.stroke();
+        drawBirthDeath(ctx,bx,yTop-6,'birth',tp.type==='res'?'rgba(162,45,45,0.8)':'rgba(15,110,86,0.8)');
+      }
+      // Death marker
+      if(tp.deathI!==null){
+        const dx=toX(tp.deathI);
+        ctx.strokeStyle=tp.type==='res'?'rgba(226,75,74,0.4)':'rgba(29,158,117,0.4)'; ctx.lineWidth=1;
+        ctx.setLineDash([3,3]);
+        ctx.beginPath(); ctx.moveTo(dx,yTop); ctx.lineTo(dx,yBot); ctx.stroke();
+        ctx.setLineDash([]);
+        drawBirthDeath(ctx,dx,yBot+12,'death',tp.type==='res'?'rgba(162,45,45,0.7)':'rgba(15,110,86,0.7)');
+        // Consumed label
+        ctx.fillStyle='rgba(136,135,128,0.6)'; ctx.font=`italic 9px system-ui`; ctx.textAlign='center';
+        ctx.fillText('consumed',dx,(yTop+yBot)/2+3);
+      }
+
+      // Price labels
+      ctx.fillStyle=tp.type==='res'?'rgba(162,45,45,0.9)':'rgba(15,110,86,0.9)';
+      ctx.font=`${tp.active?'500':'400'} 10px system-ui`; ctx.textAlign='right';
+      ctx.fillText(tp.label,pad.l-4,yCentre+3.5);
+
+      // Wick high/low labels on active pools
+      if(tp.active){
+        ctx.fillStyle='rgba(136,135,128,0.7)'; ctx.font=`9px system-ui`; ctx.textAlign='right';
+        ctx.fillText('wick high: $'+Math.round(tp.wickHigh/100)/10+'K',pad.l-4,yTop+9);
+        ctx.fillText('wick low: $'+Math.round(tp.wickLow/100)/10+'K',pad.l-4,yBot-3);
+      }
+    }
+
+    // Trade markers — inside rectangles only
+    const trades=[
+      {i:5, type:'missed', zone:'res'},{i:11,type:'taken',  zone:'res'},
+      {i:18,type:'taken',  zone:'sup'},{i:24,type:'skipped',zone:'sup'},
+      {i:30,type:'missed', zone:'res'},{i:37,type:'taken',  zone:'res'},
+      {i:43,type:'taken',  zone:'sup'},
+    ];
+    for(const t of trades){
+      const c=candles[t.i]; if(!c) continue;
+      const x=toX(t.i);
+      const y=t.zone==='res'?toY(c.h)-8:toY(c.l)+8;
+      const col=t.type==='taken'?C.taken:t.type==='missed'?C.missed:C.skipped;
+      ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='rgba(255,255,255,0.8)'; ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  // Candles — always shown
+  for(let i=0;i<N-1;i++){
+    const c=candles[i]; const x=toX(i);
+    drawCandle(ctx,x,hw,toY(c.o),toY(c.c),toY(c.h),toY(c.l),c.c>=c.o,false);
+  }
+
+  // Y axis
+  ctx.fillStyle=C.txt; ctx.font=`10px system-ui`; ctx.textAlign='right';
+  for(let g=0;g<=5;g++){
+    const p=minP+(g/5)*pRange; const gy=toY(p);
+    if(gy>pad.t+4&&gy<pad.t+ch-4)
+      ctx.fillText('$'+Math.round(p/100)/10+'K',pad.l-5,gy+3.5);
+  }
+
+  // X labels
+  ctx.fillStyle=C.txt; ctx.font=`11px system-ui`; ctx.textAlign='center';
+  ['Mon','Tue','Wed','Thu','Fri'].forEach((l,i)=>ctx.fillText(l,pad.l+(i/4)*pastW,H-8));
+
+  // NOW LINE
+  ctx.strokeStyle=C.nowLine; ctx.lineWidth=1.5; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(nowX,pad.t); ctx.lineTo(nowX,pad.t+ch); ctx.stroke();
+  ctx.fillStyle=C.txtP; ctx.font=`500 11px system-ui`; ctx.textAlign='center';
+  ctx.fillText('now',nowX,H-8);
+
+  // ═══════════════════════════════════════
+  // LAYER 3: EXECUTION — lower TF zoom
+  // Only shown near active pool
+  // ═══════════════════════════════════════
+  if(showExecution){
+    const execPool=toY(64800);
+    const execBand=(380/pRange)*ch;
+    // Execution zone highlight on past — last 8 candles near pool
+    ctx.fillStyle=C.exec;
+    ctx.fillRect(toX(36),toY(64800+190),toX(43)-toX(36),execBand);
+    ctx.strokeStyle=C.execBdr; ctx.lineWidth=0.8; ctx.setLineDash([3,3]);
+    ctx.strokeRect(toX(36),toY(64800+190),toX(43)-toX(36),execBand);
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(186,117,23,0.8)'; ctx.font=`500 9px system-ui`; ctx.textAlign='center';
+    ctx.fillText('execution zone — lower TF entry',
+      (toX(36)+toX(43))/2, toY(64800+190)-5);
+  }
+
+  // ═══════════════════════════════════════
+  // FORK — future arms
+  // ═══════════════════════════════════════
+  const wireEndY=toY(lastC.c);
+  const slope=(lastC.c-candles[N-8].c)/pRange;
+  const gapFrac=Math.min(0.28,Math.max(0.11,Math.abs(slope)*6));
+  const gapPx=ch*gapFrac;
+  const armH=(ch-gapPx)/2;
+  const upperMid=pad.t+armH*0.5;
+  const lowerMid=pad.t+armH+gapPx+armH*0.5;
+  const gapTop=pad.t+armH;
+  const gapBot=pad.t+armH+gapPx;
+
+  // Gap — velocity
+  ctx.fillStyle=C.gap; ctx.fillRect(nowX,gapTop,futureW,gapPx);
+  ctx.fillStyle=C.txt; ctx.font=`italic 10px system-ui`; ctx.textAlign='center';
+  const velLabel=gapFrac>0.20?'trending — 45°+':'ranging — 26°–45°';
+  ctx.fillText(velLabel,nowX+futureW*0.5,gapTop+gapPx*0.5+4);
+
+  // Upper arm — $64.8K resistance — dominant
+  ctx.fillStyle='rgba(226,75,74,0.04)'; ctx.fillRect(nowX,pad.t,futureW,armH);
+
+  // Pool continues into arm — from actual wick bounds
+  const resWickH=toY(65120), resWickL=toY(64520);
+  ctx.fillStyle='rgba(226,75,74,0.12)';
+  ctx.fillRect(nowX+futureW*0.4,resWickH,futureW*0.55,resWickL-resWickH);
+  ctx.strokeStyle='rgba(226,75,74,0.55)'; ctx.lineWidth=1.2; ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(nowX+futureW*0.4,upperMid); ctx.lineTo(nowX+futureW,upperMid); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Liq cluster
+  ctx.fillStyle='rgba(239,159,39,0.18)';
+  ctx.fillRect(nowX+futureW*0.55,resWickH+4,futureW*0.38,resWickL-resWickH-8);
+  ctx.strokeStyle='rgba(239,159,39,0.55)'; ctx.lineWidth=0.7; ctx.setLineDash([3,3]);
+  ctx.strokeRect(nowX+futureW*0.55,resWickH+4,futureW*0.38,resWickL-resWickH-8);
+  ctx.setLineDash([]);
+  ctx.fillStyle='rgba(186,117,23,0.8)'; ctx.font=`9px system-ui`; ctx.textAlign='center';
+  ctx.fillText('liq. cluster',nowX+futureW*0.74,resWickH-3);
+
+  // Last real candle on dominant arm
+  const lastCandleX=nowX+futureW*0.26;
+  const isLastUp=lastC.c>=lastC.o;
+  const lBH=Math.abs(lastC.h-lastC.l)*0.30;
+  const lWU=Math.abs(lastC.h-lastC.l)*0.40;
+  const lWD=Math.abs(lastC.h-lastC.l)*0.15;
+  ctx.strokeStyle=isLastUp?C.wickUp:C.wickDn; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(lastCandleX,upperMid-lBH/2-lWU); ctx.lineTo(lastCandleX,upperMid-lBH/2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(lastCandleX,upperMid+lBH/2); ctx.lineTo(lastCandleX,upperMid+lBH/2+lWD); ctx.stroke();
+  ctx.fillStyle=isLastUp?C.bodyUp:C.bodyDn;
+  ctx.fillRect(lastCandleX-hw,upperMid-lBH/2,hw*2,lBH);
+  ctx.fillStyle='rgba(127,119,221,0.8)'; ctx.font=`500 9px system-ui`; ctx.textAlign='center';
+  ctx.fillText('last candle',lastCandleX,upperMid-lBH/2-lWU-8);
+
+  // Ghost candle upper
+  const gRX=nowX+futureW*0.80;
+  const gRWU=(resWickL-resWickH)*0.55, gRB=(resWickL-resWickH)*0.28, gRWD=(resWickL-resWickH)*0.17;
+  drawCandle(ctx,gRX,hw,upperMid+gRB/2,upperMid-gRB/2,upperMid-gRB/2-gRWU,upperMid+gRB/2+gRWD,false,true);
+  ctx.fillStyle=C.armAbove; ctx.beginPath(); ctx.arc(gRX,upperMid-gRB/2-gRWU-9,5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font=`bold 8px system-ui`; ctx.textAlign='center';
+  ctx.fillText('▼',gRX,upperMid-gRB/2-gRWU-5.5);
+  ctx.fillStyle=C.ghostBdr; ctx.font=`9px system-ui`;
+  ctx.fillText('projected sweep',gRX,upperMid+gRB/2+gRWD+12);
+
+  // Upper arm wire
+  ctx.beginPath(); ctx.strokeStyle='rgba(127,119,221,0.10)'; ctx.lineWidth=14;
+  ctx.moveTo(nowX,wireEndY);
+  ctx.bezierCurveTo(nowX+futureW*0.18,wireEndY,nowX+futureW*0.22,upperMid,lastCandleX,upperMid);
+  ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle=C.armAbove; ctx.lineWidth=3; ctx.setLineDash([]);
+  ctx.moveTo(nowX,wireEndY);
+  ctx.bezierCurveTo(nowX+futureW*0.18,wireEndY,nowX+futureW*0.22,upperMid,lastCandleX,upperMid);
+  ctx.stroke();
+
+  // Labels upper
+  ctx.fillStyle='#534AB7'; ctx.font=`500 10px system-ui`; ctx.textAlign='left';
+  ctx.fillText('$64.8K — 92% rich',nowX+5,pad.t+13);
+  ctx.fillStyle='rgba(127,119,221,0.9)'; ctx.font=`500 9px system-ui`;
+  ctx.fillText('DOMINANT · short planned',nowX+5,pad.t+25);
+
+  // Lower arm — $61.3K support — subordinate
+  ctx.fillStyle='rgba(29,158,117,0.04)'; ctx.fillRect(nowX,gapBot,futureW,armH);
+
+  const supWickH=toY(61580), supWickL=toY(60980);
+  ctx.fillStyle='rgba(29,158,117,0.10)';
+  ctx.fillRect(nowX+futureW*0.4,supWickH,futureW*0.55,supWickL-supWickH);
+  ctx.strokeStyle='rgba(29,158,117,0.45)'; ctx.lineWidth=1; ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(nowX+futureW*0.4,lowerMid); ctx.lineTo(nowX+futureW,lowerMid); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Ghost candle lower
+  const gSX=nowX+futureW*0.78;
+  const gSWD=(supWickL-supWickH)*0.55, gSB=(supWickL-supWickH)*0.25, gSWU=(supWickL-supWickH)*0.15;
+  drawCandle(ctx,gSX,hw,lowerMid-gSB/2,lowerMid+gSB/2,lowerMid-gSB/2-gSWU,lowerMid+gSB/2+gSWD,true,true);
+  ctx.fillStyle=C.armBelow; ctx.beginPath(); ctx.arc(gSX,lowerMid+gSB/2+gSWD+9,5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font=`bold 8px system-ui`; ctx.textAlign='center';
+  ctx.fillText('▲',gSX,lowerMid+gSB/2+gSWD+12.5);
+  ctx.fillStyle=C.ghostBdr; ctx.font=`9px system-ui`;
+  ctx.fillText('projected bounce',gSX,lowerMid-gSB/2-gSWU-8);
+
+  // Lower arm wire — subordinate
+  ctx.beginPath(); ctx.strokeStyle='rgba(29,158,117,0.08)'; ctx.lineWidth=7;
+  ctx.moveTo(nowX,wireEndY);
+  ctx.bezierCurveTo(nowX+futureW*0.18,wireEndY,nowX+futureW*0.22,lowerMid,nowX+futureW*0.55,lowerMid);
+  ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle=C.armBelow; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+  ctx.moveTo(nowX,wireEndY);
+  ctx.bezierCurveTo(nowX+futureW*0.18,wireEndY,nowX+futureW*0.22,lowerMid,nowX+futureW*0.55,lowerMid);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle='#0F6E56'; ctx.font=`500 10px system-ui`; ctx.textAlign='left';
+  ctx.fillText('$61.3K — 84% rich',nowX+5,pad.t+ch-14);
+  ctx.fillStyle='rgba(29,158,117,0.8)'; ctx.font=`9px system-ui`;
+  ctx.fillText('subordinate · long planned',nowX+5,pad.t+ch-4);
+
+  // Future time labels
+  ctx.fillStyle=C.txt; ctx.font=`11px system-ui`; ctx.textAlign='center';
+  ctx.fillText('Sat',nowX+futureW*0.28,H-8);
+  ctx.fillText('Sun',nowX+futureW*0.78,H-8);
+
+  // Layer indicator
+  const layerNames={all:'All layers',landscape:'Layer 1 — landscape',trading:'Layer 2 — trading',execution:'Layer 3 — execution'};
+  const layerColors={all:'#888780',landscape:'rgba(29,158,117,0.8)',trading:'rgba(127,119,221,0.8)',execution:'rgba(186,117,23,0.8)'};
+  ctx.fillStyle=layerColors[activeLayer]; ctx.font=`500 10px system-ui`; ctx.textAlign='left';
+  ctx.fillText(layerNames[activeLayer],pad.l+4,pad.t+13);
+
+  ctx.strokeStyle='rgba(0,0,0,0.04)'; ctx.lineWidth=0.5; ctx.strokeRect(pad.l,pad.t,cw,ch);
+}
+
+draw();
+window.addEventListener('resize',draw);
+</script>
+</body>
+</html>

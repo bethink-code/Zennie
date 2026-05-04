@@ -702,6 +702,145 @@ export type ZennyPool = typeof zennyPools.$inferSelect;
 export type InsertZennyPool = typeof zennyPools.$inferInsert;
 
 // ============================================================================
+// Hyblock — historical liquidation data harvested from Hyblock Capital's Redux
+// store during one-month $99 subscription. Raw payload + normalized tables.
+// ============================================================================
+
+export const hyblockcaptureEnum = pgEnum("hyblock_capture_source", [
+  "redux_harvest",
+  "manual_entry",
+]);
+
+export const hyblockCaptures = pgTable(
+  "hyblock_captures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    exchange: varchar("exchange", { length: 32 }).notNull(),
+    coin: varchar("coin", { length: 16 }).notNull(),
+    lookback: varchar("lookback", { length: 32 }).notNull(),
+    startDate: timestamp("start_date").notNull(),
+    endDate: timestamp("end_date").notNull(),
+    barCount: integer("bar_count").notNull(),
+    source: hyblockcaptureEnum("source").notNull().default("redux_harvest"),
+    payload: jsonb("payload").notNull(),
+    capturedAt: timestamp("captured_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("hyblock_captures_coin_lookback_idx").on(t.coin, t.lookback),
+    index("hyblock_captures_exchange_coin_idx").on(t.exchange, t.coin),
+  ],
+);
+
+export const hyblockOhlc = pgTable(
+  "hyblock_ohlc",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    captureId: uuid("capture_id").notNull().references(() => hyblockCaptures.id, { onDelete: "cascade" }),
+    exchange: varchar("exchange", { length: 32 }).notNull(),
+    coin: varchar("coin", { length: 16 }).notNull(),
+    barTime: timestamp("bar_time").notNull(),
+    open: numeric("open", { precision: 20, scale: 8 }).notNull(),
+    high: numeric("high", { precision: 20, scale: 8 }).notNull(),
+    low: numeric("low", { precision: 20, scale: 8 }).notNull(),
+    close: numeric("close", { precision: 20, scale: 8 }).notNull(),
+    buyVolume: numeric("buy_volume", { precision: 24, scale: 2 }).notNull(),
+    sellVolume: numeric("sell_volume", { precision: 24, scale: 2 }).notNull(),
+  },
+  (t) => [
+    index("hyblock_ohlc_coin_time_idx").on(t.coin, t.barTime),
+  ],
+);
+
+export const hyblockLiqLevels = pgTable(
+  "hyblock_liq_levels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    captureId: uuid("capture_id").notNull().references(() => hyblockCaptures.id, { onDelete: "cascade" }),
+    exchange: varchar("exchange", { length: 32 }).notNull(),
+    coin: varchar("coin", { length: 16 }).notNull(),
+    barTime: timestamp("bar_time").notNull(),
+    side: tradeSideEnum("side").notNull(),
+    tier: integer("tier").notNull(),
+    price: numeric("price", { precision: 20, scale: 8 }).notNull(),
+  },
+  (t) => [
+    index("hyblock_liq_coin_time_side_idx").on(t.coin, t.barTime, t.side),
+  ],
+);
+
+// ============================================================================
+// Binance — free public endpoint data (ongoing continuity layer)
+// ============================================================================
+
+export const binanceOi = pgTable(
+  "binance_oi",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    symbol: varchar("symbol", { length: 32 }).notNull(),
+    timestamp: timestamp("timestamp").notNull(),
+    openInterest: numeric("open_interest", { precision: 24, scale: 8 }).notNull(),
+    openInterestValue: numeric("open_interest_value", { precision: 24, scale: 2 }).notNull(),
+    interval: varchar("interval", { length: 8 }).notNull(),
+  },
+  (t) => [
+    index("binance_oi_symbol_ts_idx").on(t.symbol, t.timestamp),
+  ],
+);
+
+export const binanceFundingRates = pgTable(
+  "binance_funding_rates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    symbol: varchar("symbol", { length: 32 }).notNull(),
+    fundingTime: timestamp("funding_time").notNull(),
+    fundingRate: numeric("funding_rate", { precision: 20, scale: 10 }).notNull(),
+    markPrice: numeric("mark_price", { precision: 20, scale: 8 }).notNull(),
+  },
+  (t) => [
+    index("binance_funding_symbol_ts_idx").on(t.symbol, t.fundingTime),
+  ],
+);
+
+export const binanceLongShortRatio = pgTable(
+  "binance_long_short_ratio",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    symbol: varchar("symbol", { length: 32 }).notNull(),
+    timestamp: timestamp("timestamp").notNull(),
+    longShortRatio: numeric("long_short_ratio", { precision: 12, scale: 6 }).notNull(),
+    longAccount: numeric("long_account", { precision: 8, scale: 4 }).notNull(),
+    shortAccount: numeric("short_account", { precision: 8, scale: 4 }).notNull(),
+    interval: varchar("interval", { length: 8 }).notNull(),
+  },
+  (t) => [
+    index("binance_ls_symbol_ts_idx").on(t.symbol, t.timestamp),
+  ],
+);
+
+// Real liquidation events from the Binance Futures forceOrder WebSocket
+// stream (wss://fstream.binance.com/ws/!forceOrder@arr). Stream is
+// forward-only — we accumulate from listener boot. positionSide is
+// derived: SELL order = a long was liquidated; BUY order = a short was.
+export const binanceLiquidations = pgTable(
+  "binance_liquidations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    symbol: varchar("symbol", { length: 32 }).notNull(),
+    eventTime: timestamp("event_time").notNull(),
+    positionSide: tradeSideEnum("position_side").notNull(),
+    price: numeric("price", { precision: 20, scale: 8 }).notNull(),
+    averagePrice: numeric("average_price", { precision: 20, scale: 8 }).notNull(),
+    quantity: numeric("quantity", { precision: 24, scale: 8 }).notNull(),
+    usdValue: numeric("usd_value", { precision: 24, scale: 2 }).notNull(),
+    recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("binance_liq_symbol_time_idx").on(t.symbol, t.eventTime),
+    index("binance_liq_symbol_price_idx").on(t.symbol, t.price),
+  ],
+);
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -725,6 +864,12 @@ export type AutoresearchIteration = typeof autoresearchIterations.$inferSelect;
 export type InsertAutoresearchIteration = typeof autoresearchIterations.$inferInsert;
 export type LlmUsage = typeof llmUsage.$inferSelect;
 export type RegimeChange = typeof regimeChanges.$inferSelect;
+export type HyblockCapture = typeof hyblockCaptures.$inferSelect;
+export type InsertHyblockCapture = typeof hyblockCaptures.$inferInsert;
+export type HyblockOhlc = typeof hyblockOhlc.$inferSelect;
+export type HyblockLiqLevel = typeof hyblockLiqLevels.$inferSelect;
+export type BinanceLiquidation = typeof binanceLiquidations.$inferSelect;
+export type InsertBinanceLiquidation = typeof binanceLiquidations.$inferInsert;
 
 export type Regime =
   | "no_trade"

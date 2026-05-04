@@ -5,8 +5,11 @@ import rateLimit from "express-rate-limit";
 import { setupAuth } from "./auth";
 import { registerRoutes } from "./routes";
 import { registerZennyRoutes } from "./routes/zennyRoutes";
+import { registerHyblockRoutes } from "./routes/hyblockRoutes";
 import { startBotRunner } from "./modules/botRunner";
 import { cleanupStaleRunningSessions } from "./modules/autoresearch/orchestrator";
+import { startContinuityScheduler } from "./modules/zenny/infrastructure/binanceContinuity/startContinuityScheduler";
+import { startLiquidationListener } from "./modules/zenny/infrastructure/binanceLiquidations/startLiquidationListener";
 
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
@@ -43,7 +46,7 @@ if (isProd) {
   app.use(cors({ origin: true, credentials: true }));
 }
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use(
@@ -63,6 +66,7 @@ app.use(
 setupAuth(app);
 registerRoutes(app);
 registerZennyRoutes(app);
+registerHyblockRoutes(app);
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -92,11 +96,13 @@ app.listen(PORT, () => {
   console.log(
     `[phoenix-v96] paper-trading=${process.env.PAPER_TRADING_MODE} env=${process.env.NODE_ENV}`
   );
-  startBotRunner();
-  // Reconcile any autoresearch sessions left stranded in "running"
-  // status by a previous process death (server restart, crash, etc).
-  // They get flipped to "paused" so the operator can continue them.
+  // Old bot runner disabled during Zenny rebuild.
+  // The two-wire braid + decision module replaces it; until that lands,
+  // nothing should be opening paper trades.
+  // startBotRunner();
   cleanupStaleRunningSessions().catch((err) =>
     console.error("[autoresearch] cleanup failed", err)
   );
+  startContinuityScheduler();
+  startLiquidationListener();
 });

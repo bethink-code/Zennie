@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+* { box-sizing:border-box; margin:0; padding:0; font-family:system-ui,sans-serif; }
+body { background:#f8f7f4; color:#3d3d3a; padding:16px; }
+.scenario-row { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+.sc-btn { padding:6px 13px; border-radius:8px; border:0.5px solid rgba(0,0,0,0.15); background:#f1efe8; font-size:12px; cursor:pointer; color:#73726c; transition:all .12s; }
+.sc-btn.active { background:#fff; border-color:rgba(0,0,0,0.3); color:#3d3d3a; font-weight:500; }
+canvas { display:block; width:100%; border-radius:8px; margin-bottom:12px; border:0.5px solid rgba(0,0,0,0.07); }
+.strategy-card { background:#fff; border:0.5px solid rgba(0,0,0,0.10); border-radius:12px; padding:14px 16px; }
+.s-title { font-size:14px; font-weight:500; margin-bottom:6px; }
+.s-body { font-size:12px; color:#73726c; line-height:1.7; margin-bottom:10px; }
+.s-rules { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+@media(max-width:480px){.s-rules{grid-template-columns:1fr;}}
+.s-rule { background:#f8f7f4; border-radius:8px; padding:8px 10px; font-size:11px; color:#5F5E5A; line-height:1.6; }
+.s-rule strong { color:#3d3d3a; font-weight:500; display:block; margin-bottom:2px; }
+</style>
+</head>
+<body>
+
+<div class="scenario-row">
+  <button class="sc-btn active" onclick="setScenario('midrange')">Mid-corridor</button>
+  <button class="sc-btn" onclick="setScenario('nearres')">Approaching resistance</button>
+  <button class="sc-btn" onclick="setScenario('nearsup')">Approaching support</button>
+  <button class="sc-btn" onclick="setScenario('breakout')">Breaking out</button>
+</div>
+
+<canvas id="c" height="280" role="img" aria-label="Strategy geometry diagram showing price position between zones and Zenny behaviour"></canvas>
+
+<div class="strategy-card">
+  <div class="s-title" id="s-title">—</div>
+  <div class="s-body" id="s-body">—</div>
+  <div class="s-rules" id="s-rules"></div>
+</div>
+
+<script>
+const SCENARIOS={
+  midrange:{
+    label:'Mid-corridor — price equidistant between zones',
+    body:'Price sits in the middle of the corridor. Neither pool is close. No trade is valid. Zenny waits. This is not a regime declaration — it is a geometric fact. The wire has no lean. Both arms are equal weight. The gap is moderate.',
+    rules:[
+      {title:'Position in corridor',val:'40–60% — no bias'},
+      {title:'Zenny action',val:'Wait. No entry. Monitor both arms.'},
+      {title:'Trade size',val:'Zero — no position'},
+      {title:'Braid shape',val:'Narrow Y, equal arms'},
+    ],
+    wirePos:0.5, velocity:0.0, scenario:'mid',
+  },
+  nearres:{
+    label:'Approaching resistance — price within 15% of upper zone',
+    body:'Price is trending toward the resistance pool. The upper arm is dominant — thicker, bolder. Zenny prepares the short trade inside the zone. Position sizing scales with richness of the pool and distance remaining. The gap is widening.',
+    rules:[
+      {title:'Position in corridor',val:'75–90% — near resistance'},
+      {title:'Zenny action',val:'Pre-place short at zone. Size by richness.'},
+      {title:'Trade size',val:'Standard — confirmed zone'},
+      {title:'Braid shape',val:'Wide Y, upper arm dominant'},
+    ],
+    wirePos:0.82, velocity:0.015, scenario:'res',
+  },
+  nearsup:{
+    label:'Approaching support — price within 15% of lower zone',
+    body:'Price is moving toward the support pool. The lower arm becomes dominant. Zenny prepares the long trade. If the zone is rich enough and a sweep occurs, the sweep trade fires. The corridor compresses from below.',
+    rules:[
+      {title:'Position in corridor',val:'10–25% — near support'},
+      {title:'Zenny action',val:'Pre-place long at zone. Watch for sweep.'},
+      {title:'Trade size',val:'Standard — confirmed zone'},
+      {title:'Braid shape',val:'Wide Y, lower arm dominant'},
+    ],
+    wirePos:0.18, velocity:-0.014, scenario:'sup',
+  },
+  breakout:{
+    label:'Breaking out — price has pierced a zone and closed outside',
+    body:'The wire has punched through a zone and the candle closed beyond it. This is either a sweep about to reverse or a genuine breakout. Zenny reads the volume and candle close. If close is back inside — sweep trade. If close remains outside — the zone flips polarity and Zenny waits for the retest.',
+    rules:[
+      {title:'Position in corridor',val:'Beyond zone boundary'},
+      {title:'Zenny action',val:'Sweep: enter reversal. Breakout: wait retest.'},
+      {title:'Trade size',val:'Reduced — higher uncertainty'},
+      {title:'Braid shape',val:'Y snapping wide — one arm collapsing'},
+    ],
+    wirePos:0.95, velocity:0.025, scenario:'break',
+  },
+};
+
+function rng(seed){ let s=seed; return ()=>{ s=(s*16807)%2147483647; return (s-1)/2147483646; }; }
+function smooth(arr,n=2){ let a=[...arr]; for(let k=0;k<n;k++) a=a.map((v,i)=>i===0||i===a.length-1?v:(a[i-1]+v+a[i+1])/3); return a; }
+
+const ZONE_TOP=0.18; // resistance at 18% from top
+const ZONE_BOT=0.82; // support at 82% from top (normalised y)
+
+let currentScenario='midrange';
+
+function setScenario(key){
+  currentScenario=key;
+  document.querySelectorAll('.sc-btn').forEach((b,i)=>b.classList.toggle('active',Object.keys(SCENARIOS)[i]===key));
+  const sc=SCENARIOS[key];
+  document.getElementById('s-title').textContent=sc.label;
+  document.getElementById('s-body').textContent=sc.body;
+  document.getElementById('s-rules').innerHTML=sc.rules.map(r=>`<div class="s-rule"><strong>${r.title}</strong>${r.val}</div>`).join('');
+  drawScenario(sc);
+}
+
+function drawScenario(sc){
+  const cv=document.getElementById('c');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.parentElement.clientWidth;
+  const H=parseInt(cv.getAttribute('height'));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');
+  ctx.scale(dpr,dpr);
+
+  const pad={l:52,r:16,t:16,b:28};
+  const cw=W-pad.l-pad.r;
+  const ch=H-pad.t-pad.b;
+  const NOW_FRAC=0.60;
+  const nowX=pad.l+NOW_FRAC*cw;
+  const futureW=cw*(1-NOW_FRAC);
+
+  // Wire position = sc.wirePos (0=top/resistance, 1=bottom/support) in corridor
+  // Map to Y: corridor is between ZONE_TOP and ZONE_BOT
+  const corridorTop=ZONE_TOP*ch;
+  const corridorBot=ZONE_BOT*ch;
+  const corridorH=corridorBot-corridorTop;
+  const wireY=pad.t+corridorTop+sc.wirePos*corridorH;
+
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+
+  // Grid
+  ctx.strokeStyle='rgba(0,0,0,0.04)'; ctx.lineWidth=0.5;
+  for(let g=0;g<=4;g++){
+    const gy=pad.t+(g/4)*ch;
+    ctx.beginPath(); ctx.moveTo(pad.l,gy); ctx.lineTo(pad.l+cw,gy); ctx.stroke();
+  }
+
+  // Zone bands — past
+  // Resistance zone
+  const resY=pad.t+ZONE_TOP*ch;
+  const supY=pad.t+ZONE_BOT*ch;
+  const bandPx=ch*0.07;
+
+  ctx.fillStyle='rgba(226,75,74,0.12)';
+  ctx.fillRect(pad.l,resY-bandPx/2,nowX-pad.l,bandPx);
+  ctx.strokeStyle='rgba(226,75,74,0.6)'; ctx.lineWidth=1.5; ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(pad.l,resY); ctx.lineTo(nowX,resY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='rgba(162,45,45,0.8)'; ctx.font=`500 10px system-ui`; ctx.textAlign='right';
+  ctx.fillText('$64.8K',pad.l-4,resY+3.5);
+
+  // Support zone
+  ctx.fillStyle='rgba(29,158,117,0.12)';
+  ctx.fillRect(pad.l,supY-bandPx/2,nowX-pad.l,bandPx);
+  ctx.strokeStyle='rgba(29,158,117,0.6)'; ctx.lineWidth=1.5; ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(pad.l,supY); ctx.lineTo(nowX,supY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='rgba(15,110,86,0.8)'; ctx.font=`500 10px system-ui`; ctx.textAlign='right';
+  ctx.fillText('$61.3K',pad.l-4,supY+3.5);
+
+  // Wire — past, approaching nowX at wireY
+  const r=rng(42);
+  const N=60;
+  const wirePts=[];
+  let p=0.5; // start midrange
+  for(let i=0;i<N;i++){
+    const progress=i/N;
+    const target=sc.wirePos;
+    const pull=(target-p)*0.05*(1+progress*2);
+    p+=(r()-0.48)*0.03+pull;
+    p=Math.max(0.02,Math.min(0.98,p));
+    wirePts.push(p);
+  }
+  const sw=smooth(wirePts,3);
+
+  // Draw past wire
+  ctx.beginPath(); ctx.strokeStyle='rgba(61,61,58,0.12)'; ctx.lineWidth=8; ctx.lineJoin='round';
+  sw.forEach((v,i)=>{
+    const x=pad.l+(i/(N-1))*NOW_FRAC*cw;
+    const y=pad.t+corridorTop+v*corridorH;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  ctx.beginPath(); ctx.strokeStyle='rgba(61,61,58,0.75)'; ctx.lineWidth=2; ctx.lineJoin='round';
+  sw.forEach((v,i)=>{
+    const x=pad.l+(i/(N-1))*NOW_FRAC*cw;
+    const y=pad.t+corridorTop+v*corridorH;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  // Position indicator on wire
+  ctx.fillStyle='rgba(61,61,58,0.7)';
+  ctx.beginPath(); ctx.arc(nowX-2,wireY,5,0,Math.PI*2); ctx.fill();
+
+  // Distance bars — show distance to each zone
+  const distToRes=wireY-(resY+bandPx/2);
+  const distToSup=(supY-bandPx/2)-wireY;
+  const totalDist=distToRes+distToSup;
+  const dominantIsRes=distToRes<distToSup;
+
+  // Distance labels
+  ctx.strokeStyle='rgba(226,75,74,0.4)'; ctx.lineWidth=0.8; ctx.setLineDash([2,2]);
+  ctx.beginPath(); ctx.moveTo(nowX-20,resY+bandPx/2); ctx.lineTo(nowX-20,wireY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='rgba(162,45,45,0.7)'; ctx.font=`10px system-ui`; ctx.textAlign='right';
+  const distResPct=Math.round((distToRes/corridorH)*100);
+  ctx.fillText(distResPct+'%',nowX-24,(resY+bandPx/2+wireY)/2+3);
+
+  ctx.strokeStyle='rgba(29,158,117,0.4)'; ctx.lineWidth=0.8; ctx.setLineDash([2,2]);
+  ctx.beginPath(); ctx.moveTo(nowX-20,wireY); ctx.lineTo(nowX-20,supY-bandPx/2); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='rgba(15,110,86,0.7)'; ctx.font=`10px system-ui`; ctx.textAlign='right';
+  const distSupPct=Math.round((distToSup/corridorH)*100);
+  ctx.fillText(distSupPct+'%',nowX-24,(wireY+supY-bandPx/2)/2+3);
+
+  // NOW LINE
+  ctx.strokeStyle='rgba(61,61,58,0.4)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(nowX,pad.t); ctx.lineTo(nowX,pad.t+ch); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='#888780'; ctx.font=`10px system-ui`; ctx.textAlign='center';
+  ctx.fillText('now',nowX,H-8);
+
+  // FUTURE FORK
+  // Gap width based on velocity
+  const vel=Math.abs(sc.velocity);
+  const gapFrac=Math.min(0.32,Math.max(0.08,vel*8+0.10));
+  const gapPx=ch*gapFrac;
+  const armH=(ch-gapPx)/2;
+  const upperMid=pad.t+armH*0.5;
+  const lowerMid=pad.t+armH+gapPx+armH*0.5;
+  const gapTop=pad.t+armH;
+  const gapBot=pad.t+armH+gapPx;
+
+  // Gap fill
+  ctx.fillStyle='rgba(244,242,237,0.97)';
+  ctx.fillRect(nowX,gapTop,futureW,gapPx);
+
+  // Velocity label in gap
+  const velLabel=vel>0.02?'high velocity':vel>0.01?'moderate':'low — waiting';
+  ctx.fillStyle='#888780'; ctx.font=`italic 10px system-ui`; ctx.textAlign='center';
+  ctx.fillText(velLabel,nowX+futureW*0.5,gapTop+gapPx*0.5+4);
+
+  // Upper arm
+  const upperDominant=dominantIsRes;
+  ctx.fillStyle='rgba(226,75,74,0.04)';
+  ctx.fillRect(nowX,pad.t,futureW,armH);
+  ctx.fillStyle=upperDominant?'rgba(226,75,74,0.14)':'rgba(226,75,74,0.07)';
+  ctx.fillRect(nowX,upperMid-bandPx/2,futureW,bandPx);
+  ctx.strokeStyle=`rgba(226,75,74,${upperDominant?0.7:0.3})`; ctx.lineWidth=upperDominant?2:1; ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(nowX,upperMid); ctx.lineTo(nowX+futureW,upperMid); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Upper arm wire
+  ctx.beginPath(); ctx.strokeStyle=`rgba(127,119,221,${upperDominant?0.12:0.05})`; ctx.lineWidth=upperDominant?14:6;
+  ctx.moveTo(nowX,wireY);
+  ctx.bezierCurveTo(nowX+futureW*0.22,wireY,nowX+futureW*0.35,upperMid,nowX+futureW*0.65,upperMid);
+  ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle='#7F77DD'; ctx.lineWidth=upperDominant?3:1.2; ctx.setLineDash(upperDominant?[]:[4,3]);
+  ctx.moveTo(nowX,wireY);
+  ctx.bezierCurveTo(nowX+futureW*0.22,wireY,nowX+futureW*0.35,upperMid,nowX+futureW*0.65,upperMid);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if(upperDominant){
+    ctx.fillStyle='rgba(127,119,221,0.9)'; ctx.font=`500 9px system-ui`; ctx.textAlign='left';
+    ctx.fillText('DOMINANT',nowX+5,pad.t+13);
+  }
+
+  // Lower arm
+  const lowerDominant=!dominantIsRes;
+  ctx.fillStyle='rgba(29,158,117,0.04)';
+  ctx.fillRect(nowX,gapBot,futureW,armH);
+  ctx.fillStyle=lowerDominant?'rgba(29,158,117,0.14)':'rgba(29,158,117,0.07)';
+  ctx.fillRect(nowX,lowerMid-bandPx/2,futureW,bandPx);
+  ctx.strokeStyle=`rgba(29,158,117,${lowerDominant?0.7:0.3})`; ctx.lineWidth=lowerDominant?2:1; ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(nowX,lowerMid); ctx.lineTo(nowX+futureW,lowerMid); ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.beginPath(); ctx.strokeStyle=`rgba(29,158,117,${lowerDominant?0.12:0.05})`; ctx.lineWidth=lowerDominant?14:6;
+  ctx.moveTo(nowX,wireY);
+  ctx.bezierCurveTo(nowX+futureW*0.22,wireY,nowX+futureW*0.35,lowerMid,nowX+futureW*0.65,lowerMid);
+  ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle='#1D9E75'; ctx.lineWidth=lowerDominant?3:1.2; ctx.setLineDash(lowerDominant?[]:[4,3]);
+  ctx.moveTo(nowX,wireY);
+  ctx.bezierCurveTo(nowX+futureW*0.22,wireY,nowX+futureW*0.35,lowerMid,nowX+futureW*0.65,lowerMid);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if(lowerDominant){
+    ctx.fillStyle='rgba(29,158,117,0.9)'; ctx.font=`500 9px system-ui`; ctx.textAlign='left';
+    ctx.fillText('DOMINANT',nowX+5,pad.t+ch-5);
+  }
+
+  // Y axis price labels
+  ctx.fillStyle='#888780'; ctx.font=`10px system-ui`; ctx.textAlign='right';
+  ctx.fillText('$64.8K',pad.l-4,resY+3);
+  ctx.fillText('$61.3K',pad.l-4,supY+3);
+}
+
+setScenario('midrange');
+window.addEventListener('resize',()=>setScenario(currentScenario));
+</script>
+</body>
+</html>

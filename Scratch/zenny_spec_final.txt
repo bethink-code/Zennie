@@ -1,0 +1,392 @@
+ ZENNY The Braid Trading System Complete System Specification April 2026 — Confidential This document contains four 
+integrated specifications for the Zenny trading system. It is written for the development team and assumes the existing 
+codebase — including the auto-research framework, Coinglass integration, panel scaffolding, and scoring logic — as 
+the foundation. Nothing is thrown away. The developer decides what maps to the new specification and what is reworked. 
+Doc Title Purpose Doc 1 The Why Philosophy, intent, and what makes Zenny categorically different Doc 2 Functional Spec 
+Every function — rules, inputs, outputs, call relationships Doc 3 UI Specification Every UI component — rules, 
+inputs, visual behaviour Doc 4 Test Specification How correct implementation of every function and component is 
+verified Document 1 The Why Philosophy, intent, and what makes Zenny categorically different 1.1 The problem with every 
+existing bot Every existing trading bot is built on a common architectural assumption: that price action expressed as 
+OHLCV candles is the primary input. Indicators are derived from that price action. RSI measures the speed of recent 
+price movement. MACD measures the relationship between moving averages of price. Even the most advanced algorithmic 
+systems are applying increasingly complex transformations to historical price data and waiting for signals to emerge. 
+This has a structural problem. Price is a lagging record of what already happened. Every indicator built on price 
+inherits that lag. By the time the signal appears, the best entry is already behind you. Zenny is built on a different 
+premise entirely. Price does not move randomly. Price moves toward liquidity. Liquidity — clusters of resting orders, 
+stop losses, liquidation thresholds — is the cause of price movement. Price action is the effect. Zenny reads the 
+cause directly and positions itself at the destination before the journey begins. 1.2 The Braid — a completely new 
+visual object The Braid is not a better candlestick chart. It is a different kind of visual object built for a specific 
+purpose: verifying that a bot is behaving with strategic integrity. A candlestick chart is optimised for human analysts 
+making real-time decisions. The Braid is optimised for answering one question — did the bot do what it was designed 
+to do. The Braid has three temporal zones. The left section is history: the price wire moving through the pool 
+landscape with all past interactions visible. The now line is the present moment. The right section splits into two 
+panels — one for the pool above, one for the pool below — each showing what Zenny expects to happen when price 
+arrives. Figure 1: The Braid — price wire on left, now line dividing present, two tendency panels on right. Last real 
+candle on dominant arm. Ghost candle shows projected sweep. 1.3 Why the rectangle and not the line Technical analysis 
+has drawn support and resistance as horizontal lines for a century. A line implies a precise price at which the market 
+will reverse. Zenny draws rectangles. Each rectangle is constructed from actual wick extremes: the ceiling is the 
+highest wick that touched and rejected the level. The floor is the lowest wick. The centre line is the body cluster. 
+The rectangle also has a lifecycle — born on first tick cluster detection, active while scoring above 60/100, 
+weakening as wick rejections tighten, dead when a candle engulfs it. When it dies it flips polarity. Resistance becomes 
+support. The level persists with a new role. Figure 2: Pool lifecycle — birth marker, wick boundaries, touch 
+interactions, death marker, polarity flip from support to resistance. 1.4 Why the angle and not a regime declaration 
+Zenny reads regime from the geometry of the wire itself. The angle of the price wire over the last 14 candles is the 
+regime. It updates with every new candle close. Gann identified the meaningful thresholds in 1935: below 14 degrees is 
+noise — no trade. 14 to 26.25 is accumulation. 26.25 to 45 is ranging. 45 to 63.75 is trending. Above 63.75 is 
+breakout or unsustainable. Figure 3: Four strategy scenarios derived from wire angle. Gap between arms represents 
+velocity toward dominant pool — wide gap = trending, narrow gap = accumulation. 1.5 Intelligence map — all inputs 
+to the Braid Zenny monitors and weights dozens of signals simultaneously. No human can do this in real time. The 
+intelligence map shows how every data source flows through the system to produce the Braid visual and trade decisions. 
+Figure 4: Zenny intelligence map — all signals flowing from raw data through pool grading, regime classification, and 
+pull scoring to visual output. 1.6 Three-layer architecture Every pool on the trading timeframe exists within a higher 
+timeframe context. The daily and 4H establish the permanent backdrop. The 1H is the active layer where trades are 
+planned. The 15m is the execution layer where entry candles form. These are not three separate analyses — they are 
+three lenses on the same underlying reality. Figure 5: Three-layer architecture — landscape (daily/4H), trading (1H), 
+execution (15m). Higher timeframes establish context; lower timeframes time entry. 1.7 Why integrity score and not 
+P&amp;L P&amp;L is deeply misleading. A bot gambling randomly in a bull market shows positive P&amp;L. A bot executing 
+a sound strategy in adverse conditions shows negative P&amp;L. Neither number tells you whether the bot is doing what 
+it was designed to do. The integrity score measures something different: of all valid setups that existed on a given 
+day, what fraction did Zenny correctly identify and act on — either by taking the trade or by intentionally skipping 
+it with a logged reason. This was the exact diagnostic that caught the original bot&apos;s failure. P&amp;L masked the 
+problem completely. The integrity score would have caught it in minutes. 1.8 The relationship to the existing codebase 
+Zenny is a rework, not a rebuild. The following components are explicitly preserved: The auto-research framework based 
+on Karpathy&apos;s self-testing methodology — this is the fundamental verification backbone The Coinglass liquidation 
+heatmap integration — feeds ScoreLiquidationCluster directly The panel and dashboard scaffolding — the Braid 
+renders within this The existing scoring and grading logic — reworked to match specification, not replaced Document 2 
+Functional Specification Every function — rules, inputs, outputs, call relationships 2.1 Architecture overview 
+Zenny&apos;s functional architecture is a pipeline with eight layers: data ingestion, tick processing, candle analysis, 
+pool identification, pool scoring, strategy classification, pull calculation, and trade and visual output. Every 
+function has defined inputs and defined outputs. RegimeGuard runs as a gate before any trade output — no exceptions. 
+2.2 Data ingestion Function Rule / Logic Test Criteria FetchCandles Inputs: symbol, timeframe, lookback. Calls Binance 
+klines endpoint. Returns [{timestamp,open,high,low,close,volume}]. Validates: no gaps, timestamps ordered, all values 
+non-null. Caches on symbol+timeframe+last_timestamp. Output matches TradingView for same symbol/timeframe within 0.01%. 
+No missing candles. No duplicates. Updates cache correctly on new candle close. FetchOrderBook Inputs: symbol, 
+depth_limit (default 500). Calls Binance /api/v3/depth. Returns {bids:[[price,qty]], asks:[[price,qty]]}. Updates via 
+WebSocket. Bids sorted descending, asks ascending. Spread matches Binance live feed within 100ms. Depth at each price 
+matches raw API. Updates within 1 second of order book change. FetchTicks Inputs: symbol, start_timestamp. Subscribes 
+to Binance trade stream WebSocket. Returns stream of {timestamp,price,qty,side}. Side=BUY if market order lifted ask, 
+SELL if hit bid. Every trade in raw stream appears in output. No duplicates. Timestamps ordered. Volume matches trade 
+size exactly. FetchLiquidationData Inputs: symbol, timeframe. Calls Coinglass API. Returns {price_level: 
+liquidation_usd} map. Caches 5 minutes. Values match manual Coinglass query for same symbol/window within 5% tolerance. 
+Cache invalidates correctly after 5 minutes. FetchFundingRate Inputs: symbol. Calls Binance futures 
+/fapi/v1/fundingRate. Returns {rate, next_funding_time}. Caches 1 minute. Matches Binance futures funding rate endpoint 
+for same timestamp exactly. NormaliseTimeframe Inputs: candles_1H array. Aggregates every 4 candles: open=first.open, 
+high=max(highs), low=min(lows), close=last.close, volume=sum. Output length = floor(input/4). Synthetic 4H candle 
+matches native 4H from exchange within 0.01%. CacheHistoricalData Inputs: key(symbol+timeframe+timestamp), data. TTL = 
+one candle period. Second call with same key returns cached data without API hit. No API hit on second call. Cache 
+invalidates on new candle close. Stale cache never returned after TTL. DetectDataGaps Inputs: candles array, 
+expected_interval. Checks consecutive timestamps differ by interval. Returns [{gap_start, gap_end, duration}]. Empty 
+array if no gaps. Injected missing candle flagged. Two consecutive missing candles both flagged. No gaps produces empty 
+array. 2.3 Tick processing Function Rule / Logic Test Criteria AggregateTicksByPrice Inputs: ticks array, bucket_size 
+(0.1% of price). Groups ticks into buckets. Returns {bucket_centre: {count, volume, buy_volume, sell_volume}}. Sum of 
+all tick volumes in bucket equals raw tick volume at that price. Total volume across buckets equals total input volume. 
+CalculateTickDensity Inputs: aggregated_ticks, window_seconds. Returns {price_level: density_score}. Density = 
+count/window_seconds. Normalised 0-1 across all levels. Level with 100 ticks scores higher than level with 10 ticks. 
+Density decays to zero outside window. Max score = 1. DetectTickCluster Inputs: tick_density, threshold (0.7). Returns 
+[{price_centre, density_score, width}] for all levels above threshold. Synthetic cluster at known price detected. 
+Random ticks spread across prices at same volume = no cluster. Threshold boundary tested. CalculateVolumeDelta Inputs: 
+ticks array, price_bucket. Returns {delta: buy-sell, total_volume, delta_ratio}. Positive = more aggressive buying. 
+Manual buy minus sell sum matches output. Positive delta in known uptrend. Negative in known downtrend. 
+DetectAbsorption Inputs: volume_delta, price_movement_pct. Returns {absorbed: bool, side, strength}. Absorbed when 
+delta &gt; threshold AND price_movement &lt; 0.1%. Large volume + minimal price movement = absorbed. Large volume + 
+significant price movement = not absorbed. MeasureBidAskSpread Inputs: order_book. Returns {spread_absolute, 
+spread_pct, mid_price}. Monitors 60-second rolling window for tightening signal. Spread matches manual top-of-book 
+calculation. Tightening signal fires when spread narrows &gt;20% over 60 seconds. CalculateCumulativeVolumeDelta 
+Inputs: volume_delta stream, window. Returns running sum. Resets on session open. Divergence flag fires when CVD makes 
+new high/low but price does not. CVD rises in known uptrend. Divergence flag fires correctly on historical examples. 
+2.4 Candle analysis Function Rule / Logic Test Criteria FindLocalExtrema Inputs: candles, lookback (5). Returns 
+{highs:[{index,price}], lows:[{index,price}]}. High = candle high &gt; all surrounding N candles. Minimum separation = 
+lookback. Known BTC swing highs and lows all detected. No false extrema on flat sections. Minimum separation enforced. 
+ClassifyCandle Inputs: candle {open,high,low,close}. Returns {type:ERC|NRC|DOJI}. ERC=body&gt;=75% range. 
+NRC=body&lt;=50%. DOJI=body&lt;=5%. Body 80% of range = ERC. 40% = NRC. 3% = DOJI. All boundary values tested. 
+MeasureWickExtreme Inputs: candles array touching a price band. Returns {wick_high:max(highs), wick_low:min(lows)}. 
+Wick high matches candle high exactly. Wick low matches candle low exactly. Tested against raw OHLCV. 
+MeasureBodyCluster Inputs: candles array. Returns {cluster_centre, cluster_width}. Centre = median of (open+close)/2. 
+Width = 90th percentile body range. Cluster centre falls between open and close. Width covers 90% of body extremes. 
+CountTouches Inputs: candles, pool_rectangle. Returns {touch_count, body_touches, wick_touches}. Touch = candle 
+high&gt;=pool.low AND candle low&lt;=pool.high. Manual count matches output. Candles entirely outside zone do not 
+increment. Body vs wick classified correctly. MeasureTouchQuality Inputs: candle, pool, subsequent_candles(5). Returns 
+{quality_score 0-100}. Scored on rejection_speed, rejection_distance, candle_type. Strong rejection scores 80+. Weak 
+touch below 30. Score monotonically related to rejection speed and distance. DetectEngulfingCandle Inputs: candle, 
+pool_rectangle. Returns {engulfed:bool}. Engulfed = body crosses BOTH pool ceiling and floor. Body crosses both 
+boundaries = true. Partial overlap = false. Tested on historical BTC breakout candles. DetectWickPierce Inputs: candle, 
+pool_rectangle, boundary. Returns {pierced:bool, depth_pct}. Pierced = wick crosses boundary but body stays inside. 
+Wick crossing boundary with body inside = true. Body crossing = false. Depth pct matches manual calculation. 
+MeasureDepartureStrength Inputs: departure_candle, prior_base_candles. Returns {strength_score 0-100}. Gap-away=100. 
+ERC=60. NRC=25. DOJI=5. Historical departure events classified correctly vs manual review. DetectTightening Inputs: 
+recent_wicks(last 5), pool. Returns {tightening:bool, trend}. Tightening = each successive wick less deep into zone. 
+Three successive tightening wicks detected. Same-depth wicks not detected. Two wicks insufficient. 2.5 Pool 
+identification Function Rule / Logic Test Criteria ClusterPriceLevels Inputs: local_extrema, tick_clusters, 
+tolerance(0.5%). Groups items within tolerance. Returns {candidate_pools:[{centre_price, extrema_count, 
+tick_density}]}. Known BTC S/R levels appear as clusters. Random prices do not. Tolerance boundary tested. 
+ValidateCandidatePool Inputs: candidate_pool, candles. Checks: touch_count&gt;=3, volume&gt;=threshold, 
+departure_strength&gt;0. Returns {valid:bool, failure_reason}. 2 touches = invalid. 3 touches + sufficient volume = 
+valid. Each failure reason testable in isolation. SetPoolBoundaries Inputs: validated_pool, candles. Returns 
+{wick_high, wick_low, centre_line, zone_width_pct}. Width must be 0.5%-1.5% of price. Wick high matches highest wick at 
+level. Centre matches body cluster. Width validated against 0.5-1.5% rule. ClassifyPoolType Inputs: pool, 
+approach_direction. Returns {type:RESISTANCE|SUPPORT}. From below = RESISTANCE. From above = SUPPORT. Historical levels 
+classified correctly. Polarity-flipped pools classified correctly after flip. DetectPoolBirth Inputs: tick_cluster, 
+existing_pools. Fires when density Z-score&gt;2.0 at level with no existing active pool. Returns {born:bool, pool_id, 
+timestamp}. Birth fires exactly once per new level. Second cluster at same level within tolerance does not fire second 
+birth. DetectPoolDeath Inputs: pool, recent_candles. Fires when engulfing candle detected OR 3 consecutive closes 
+outside boundary. Returns {dead:bool, death_candle_index, cause}. Engulfing = immediate death. Three consecutive closes 
+= death on third. One close outside = no death. DetectPoolWeakening Inputs: pool, recent_wick_interactions. Returns 
+{weakening:bool, degrade_factor 0-1}. Three successive tightening wicks. Three tightening wicks fires weakening. Two 
+insufficient. Degrade_factor reduces pool score proportionally. ApplyFibonacciExtensions Inputs: swing_low, swing_high, 
+current_price. Called when price &gt; all-time-high. Returns {synthetic_pools:[{price,level_name}]} at 1.618, 2.618, 
+3.618, 4.236 extensions. Extensions match manually calculated values. Only called above all-time-high. Updates on new 
+swing. ApplyPolarityFlip Inputs: dead_pool. Returns pool with type flipped (RES-&gt;SUP or SUP-&gt;RES), 
+status=FLIPPED, score reset to 40. Type changes. Boundaries unchanged. Score reduced to 40. Downstream functions treat 
+correctly. FilterPoolByMinimumScore Inputs: pool, score. Returns {passes:bool}. Score&gt;=60 = passes. Below 60 = 
+suppressed, no rectangle, no trade, logged. Score 60 = passes. Score 59 = fails. Failure logged. No visual or trade 
+output for failed pools. 2.6 Pool scoring Function Rule / Logic Test Criteria ScoreVolume Inputs: pool_price, 
+volume_profile. Returns {score 0-20}. Top 10%=20, top 20%=15, top 40%=10, below 40th=0. Top 10% volume node scores 20. 
+Adjacent low-volume level scores 0. Updates when volume profile recalculates. ScoreOrderBookDepth Inputs: pool_price, 
+order_book. Returns {score 0-25}. &gt;=500 BTC=25, 250-500=18, 100-250=10, &lt;100=0. 600 BTC in book scores 25. 200 
+BTC scores 10. Updates when order book changes &gt;10% at level. ScoreFreshness Inputs: pool, touch_history. Returns 
+{score 0-25}. Untouched=25, 1 touch=20, 2=14, 3=8, 4+=3. Untouched scores 25. Each touch degrades monotonically. 
+Historical touch count verified. ScoreDepartureStrength Inputs: pool_birth_candle, departure_type. Returns {score 
+0-15}. Gap-away=15, ERC=9, NRC=4, DOJI=1. Set at birth, immutable. Historical birth candles classified correctly. Score 
+does not change after birth. ScoreTimeframeConfluence Inputs: pool_price, all_timeframe_pools. Returns {score 0-10}. 1 
+TF=3, 2 TF=7, 3+ TF=10. 4 timeframes scores 10. 1 timeframe scores 3. Alignment within 0.5% price tolerance. 
+ScoreTouchQuality Inputs: touch_history. Returns {adjustment -10 to +5}. Strong rejections(&gt;70) add, weak 
+touches(&lt;30) reduce. Pool with 3 strong rejections has positive adjustment. Weak touches have negative adjustment. 
+ScoreLiquidationCluster Inputs: pool_price, liquidation_data. Returns {score 0-5}. Within 1%=5, within 2%=2, beyond 
+2%=0. Cluster within 1% scores 5. No cluster scores 0. Distance verified against manual Coinglass data. 
+AggregatePoolScore Inputs: all sub-scores. Returns {total_score, 
+breakdown{volume,depth,freshness,departure,confluence,touch_quality,liquidation}}. Max=105. Sum matches total. No 
+sub-score exceeds stated max. All 7 components in breakdown. Recalculates on every candle close. ValidatePoolThreshold 
+Inputs: pool, score. Returns {valid:bool}. Valid if score&gt;=60. Invalid = no rectangle, no trade, logged. Score 60 = 
+valid. Score 59 = invalid. Both cases logged with pool_id, score, timestamp. 2.7 Timeframe management Function Rule / 
+Logic Test Criteria DetermineActiveTimeframe Inputs: config. Returns {active_tf, higher_tf_1 (4x), higher_tf_2 (16x)}. 
+All three preloaded before trading. Correct timeframe from config. Higher TFs calculated as 4x and 16x. Data available 
+before first trade attempt. LoadHigherTimeframePools Inputs: symbol, higher_tf_1, higher_tf_2. Loads and scores pools 
+on both. Returns {landscape_pools}. Refreshes on higher_tf candle close. Daily loads before 4H. 4H loads before 1H 
+analysis. Order of operations verified by timestamp. CheckPoolVisibilityAcrossTimeframes Inputs: pool_price, 
+all_tf_pools, tolerance(0.5%). Returns {visible_on:[tf_list], confluence_count}. Within 0.5% on two TFs = visible on 
+both. 0.6% away = not visible. Confluence count matches visible TF count. AlignPoolsAcrossTimeframes Inputs: 
+trading_tf_pool, landscape_pools. Returns {aligned:bool, aligned_pools, alignment_strength}. Within 0.5% = aligned. 
+0.6% apart = not aligned. Alignment strength sums aligned pool scores correctly. ClassifyTradeType Inputs: 
+trade_direction, higher_tf_bias. Returns {type:TYPE1|TYPE2, size_modifier}. TYPE1=aligned(1.0x). TYPE2=against(0.5x). 
+Long with bullish higher TF = TYPE1. Long with bearish higher TF = TYPE2. Size modifier applied correctly. 2.8 Wire and 
+angle Function Rule / Logic Test Criteria BuildPriceWire Inputs: candles, lookback(100). Returns {wire:[close_prices], 
+timestamps}. Updates on each candle close. Wire closes match candle closes exactly. Length always equals lookback. 
+Updates within 100ms of candle close. SmoothWire Inputs: raw_wire, periods(3). Returns {smooth_wire}. 3-period SMA. End 
+points unchanged. Smoothed values between adjacent raw values. Single spike dampened. End points equal raw values. 
+MeasureWireAngle Inputs: smooth_wire, lookback(14), price_scale_factor. Returns {angle_degrees, slope_normalised}. Flat 
+price = angle near 0. Known 45° trend = angle within 2° of 45. Negative angles for downtrends. MapAngleToGann Inputs: 
+angle_degrees. Returns {gann_bracket, strategy_label}. &lt;14=NO_TRADE, 14-26.25=ACCUMULATION, 26.25-45=RANGING, 
+45-63.75=TRENDING, &gt;63.75=BREAKOUT. All five bracket boundaries tested explicitly. Angle exactly at boundary goes to 
+correct bracket. ClassifyStrategy Inputs: gann_bracket. Returns {strategy, trade_permitted:bool}. 
+NO_TRADE+ACCUMULATION=false. RANGING/TRENDING/BREAKOUT=true. All five brackets return correct strategy and 
+trade_permitted value. DetectAngleShift Inputs: current_bracket, previous_bracket. Returns {shifted:bool, from, to}. 
+Debounce: 3 candles before shift confirmed. Bracket change fires exactly once. Oscillation at boundary prevented by 
+debounce. DetectAngleWidening Inputs: angle_history(last 5). Returns {widening:bool, rate}. Widening = angle increasing 
+&gt;10° over 3 candles. 12° increase over 3 candles = widening. &lt;10° change = no widening. MeasureWireVelocity 
+Inputs: angle_history(last 5). Returns {velocity, direction:ACCELERATING|DECELERATING|STABLE}. Increasing angle = 
+ACCELERATING+positive. Decreasing = DECELERATING+negative. Constant = STABLE+near-zero. 2.9 RegimeGuard — 
+architectural gate RegimeGuard is not just a function. It is an architectural gate enforced at the pipeline level. 
+Every trade attempt must pass through RegimeGuard before any downstream function executes. No exceptions. Any trade in 
+the log without a corresponding RegimeGuard pass record is a critical integrity failure. Function Rule / Logic Test 
+Criteria RegimeGuard Inputs: wire_angle, gann_bracket. Returns {permitted:bool, reason}. Permitted=false if bracket is 
+NO_TRADE or ACCUMULATION (angle&lt;26.25). Permitted=true if RANGING/TRENDING/BREAKOUT. Reason logged for all 
+decisions. Angle 13° = not permitted. Angle 26° = not permitted. Angle 27° = permitted. Every trade in log has 
+RegimeGuard pass record. Zero exceptions. 2.10 Pull calculation Function Rule / Logic Test Criteria 
+MeasureDistanceToPool Inputs: current_price, pool. Returns {distance_pct, distance_abs, direction:UP|DOWN}. Updates 
+each candle close. Distance to pool 1% above = 1.0%. Direction correct for pools above and below. CalculatePullScore 
+Inputs: pool_score, distance_pct. Returns {pull: pool_score/distance_pct}. Normalised 0-100 across all active pools. 
+Score 90 at 1% = higher pull than score 90 at 3%. Inverse relationship confirmed. Normalisation: highest pull=100. 
+RankPoolsByPull Inputs: active_pools with pull scores. Returns {ranked_pools} sorted by pull descending. Highest pull 
+ranked first. Ties broken by pool score, then freshness. DetermineArmDominance Inputs: pool_above, pool_below with pull 
+scores. Returns {dominant:pool_id, subordinate:pool_id, dominance_ratio}. Higher pull = dominant. Equal pull = neither 
+dominant, both arms equal. Ratio = dominant/subordinate. CheckArmExists Inputs: pool, pull_score, min_threshold. 
+Returns {exists:bool}. Below threshold = arm suppressed entirely. Above threshold = arm exists. Below = absent from all 
+outputs. Threshold boundary tested. Suppression logged. DecayPullWithTime Inputs: pool, last_interaction_candles_ago. 
+Pull decays 5% per candle price moves away. Stops when price reverses. Pull lower today than yesterday if price moved 
+away. 5% decay rate verified. No decay when stationary. SuppressPhantomArm Inputs: arm, pull_score, threshold. If 
+suppressed: removed from render queue, trade plans cancelled, logged. Suppressed arm absent from all render output. No 
+faint line rendered. Cancellation logged. 2.11 Tendency wire Function Rule / Logic Test Criteria 
+MeasureApproachVelocity Inputs: current_price, pool_price, candles_elapsed. Returns {velocity_pct_per_candle, 
+direction:TOWARD|AWAY}. 2% toward pool over 5 candles = 0.4%/candle. Moving away = negative+AWAY. Stationary = 
+near-zero. ClassifyApproach Inputs: approach_velocity. Returns {approach_type:STEEP|MODERATE|FLAT}. 
+STEEP&gt;=0.3%/candle, MODERATE 0.1-0.3%, FLAT&lt;0.1%. 0.35%/candle=STEEP, 0.2%=MODERATE, 0.05%=FLAT. Boundary values 
+tested. EstimateSweepDepth Inputs: pool, approach_velocity, approach_type. Returns {sweep_depth_pct}. STEEP+rich=80%, 
+MODERATE+rich=50%, FLAT=25%. Low volume cap 30%. Rich+STEEP=80%. Thin pool=30% cap regardless of approach. 
+EstimateRejectionSpeed Inputs: pool_score, volume_score. Returns {rejection_speed:FAST|MEDIUM|SLOW}. Volume&gt;15=FAST, 
+8-15=MEDIUM, &lt;8=SLOW. High volume pool = FAST. Historical sweep events classified correctly vs observed rejection 
+speed. ClassifyTendency Inputs: pool_score, approach_type, volume_score. Returns 
+{tendency:REVERSAL|CONTINUATION|BREAKOUT}. REVERSAL=score&gt;75+STEEP. CONTINUATION=volume&lt;8. 
+BREAKOUT=score&gt;75+angle&gt;45+STEEP. 15 historical sweep events classified correctly. All three tendency types 
+testable. ClassifyLiquidityGrabType Inputs: sweep_candle, subsequent_candles(3). Returns {grab_type:GRAB|SWEEP}. 
+GRAB=fast spike+immediate return+volume spike. SWEEP=methodical multi-candle move. Single candle spike with return = 
+GRAB. Multi-candle move through 3+ levels = SWEEP. EstimateGhostCandleShape Inputs: pool, sweep_depth, rejection_speed, 
+tendency. Returns {ghost:{open,high,low,close,type}}. REVERSAL=wick into zone+close back inside. CONTINUATION=body 
+through zone. Ghost candle within pool wick bounds. Shape matches tendency. Clearly distinct from real candles 
+visually. DrawUpperTendencyWire Inputs: pool_above, sweep_depth, ghost_candle, tendency. Returns {wire_coordinates}. 
+All coordinates within pool wick bounds. Wire starts at pool lower boundary. Wick to sweep_depth. Close inside pool. 
+All points within zone bounds. DrawLowerTendencyWire Mirror of upper for pool below. Starts at pool upper boundary, 
+extends downward. Wire starts at pool upper boundary. Wick downward to sweep_depth. Close inside pool. Within zone 
+bounds. 2.12 Trade management Function Rule / Logic Test Criteria ValidateEntryLocation Inputs: entry_price, 
+pool_rectangle. Valid only if entry_price between pool.wick_low and pool.wick_high. Rejection logged with 
+distance_from_boundary. Entry inside pool = valid. Entry outside = rejected. Zero tolerance. All rejections logged. 
+CalculatePositionSize Inputs: account_balance, risk_pct, pool_score, trade_type, confluence_score. 
+Base_risk=balance*risk_pct. Modified by score/100 and type modifier. Cap and floor enforced. Size scales with 
+pool_score. TYPE2 halves size. Cap and floor enforced regardless of score. SetStopLoss Inputs: pool_rectangle, 
+trade_direction, atr_14. Long: stop=wick_low-(atr*0.5). Short: stop=wick_high+(atr*0.5). Always outside pool. Stop 
+outside pool rectangle always. ATR buffer applied consistently. Never inside pool. SetTarget Inputs: trade_direction, 
+active_pools, current_price. Returns next pool centre in direction with pull&gt;minimum. Null if none qualifying. Long 
+target = next pool above with sufficient pull. Returns null if no qualifying pool. Pool_id logged. ClassifyTradeRisk 
+Inputs: entry_price, pool_rectangle. Returns {risk_class:ZONE|SWEEP}. ZONE=entry within 20% of boundary. SWEEP=beyond 
+boundary after sweep detection. Entry at pool edge=ZONE. Sweep-triggered entry=SWEEP. Risk class logged and affects 
+sizing. LogTradeDecision Every trade produces: timestamp, pool_id, pool_score, wire_angle, gann_bracket, pull_score, 
+strategy_type, position_size, stop, target, trade_type, risk_class. All fields required. Every trade has complete log 
+record. No null fields. Written before order submitted to exchange. LogMissedSetup Inputs: pool_id, timestamp, 
+valid_setup_params, miss_reason. Called by auto-research. Miss_reason: 
+DETECTION_FAILURE|SCORE_BELOW_THRESHOLD|REGIME_BLOCKED. Every miss produces log record. Reason categorised correctly. 
+Integrity score reduced. LogSkippedSetup Inputs: pool_id, timestamp, valid_setup_params, skip_reason. Called when valid 
+setup intentionally filtered. Integrity score NOT reduced. Every skip produces log record. Reason categorised. Does not 
+reduce integrity score. DetectSessionFilter Inputs: current_utc_time, configured_sessions. Returns 
+{session_active:bool}. Trades blocked outside sessions. Valid session = active. Low liquidity window = blocked. 
+Boundary at exactly session open tested. CheckFundingRateBias Inputs: funding_rate. Returns {bias:LONG|SHORT|NEUTRAL}. 
+&gt;0.05%=SHORT, &lt;-0.05%=LONG, between=NEUTRAL. Rate 0.06%=SHORT. Rate -0.06%=LONG. Rate 0.03%=NEUTRAL. Adjusts 
+confidence, does not block trade. ManageOpenPosition Inputs: open_trade, current_pool_status. If pool dies while trade 
+open: move stop to pool death price. Log adjustment. Pool death while long = stop moves to death price. Log entry 
+created for adjustment. 2.13 Integrity and oversight Function Rule / Logic Test Criteria VerifyTradeInsidePool Inputs: 
+trade_log, pool_at_trade_time. Every logged trade entry must fall within pool rectangle at trade time. All inside = 
+pass. Any outside = integrity breach requiring investigation. Zero tolerance. CalculateIntegrityScore Inputs: taken, 
+skipped, missed. Score=(taken+skipped)/(taken+skipped+missed)*100. Manual count for known historical window matches 
+output. 100%=all setups detected. 0%=all missed. FlagMissedSetup Inputs: valid_setup detected retrospectively. Reduces 
+integrity score. Appears in daily report. Injected valid setup not traded = flagged. Score reduces by 1/total_setups 
+fraction. ClassifySetupOutcome Inputs: completed_trade, tendency_wire_prediction. Returns 
+{outcome:MATCH|MISMATCH|PARTIAL}. Historical sweep that reversed = MATCH for REVERSAL. Continued = MISMATCH. Match rate 
+logged as learning signal. GenerateDailyIntegrityReport Inputs: trade_log, setup_log, pool_map. Returns complete 
+report: score, counts, pool_map, trade_list, missed_analysis. No null fields. All fields populated. Score matches live 
+display. Pool map includes all pools active during day. UpdateBraidLive Inputs: new_candle, current_state. Updates 
+wire, pool scores, pull scores, tendency wires on each candle close. Latency &lt;500ms. Wire extends 1 point on close. 
+All updates within 500ms. Pipeline measured under load. Document 3 UI Specification Every component — rules, inputs, 
+visual behaviour, test criteria 3.1 Design principles The Braid UI has one purpose: let a human verify in 10 seconds 
+whether Zenny is behaving with strategic integrity. Every visual decision serves this purpose. Colour encodes meaning. 
+Size encodes importance. Position encodes time and price simultaneously. Colour: Red = resistance. Green = support. 
+Purple = dominant arm. Amber = warning or liquidation cluster. Grey = consumed/inactive. Size: Rectangle height = zone 
+width. Opacity = pool score. Arm wire thickness = pull score. Ghost candle size = estimated sweep depth. Time axis: 
+Left = past. Now line = present. Right = future. Pools drawn from birth to death on left, continue as destinations on 
+right. 3.2 Braid canvas Component Rule Inputs Test Criteria BraidCanvas Full-width canvas. Updates on each candle 
+close. Never full-redraws — incremental updates only. Active pools, wire data, trade markers, tendency data, now line 
+position Full redraw &lt;500ms. Partial update (single score change) &lt;50ms. No flicker on update. PriceAxis Vertical 
+axis. Labels only at active pool centre lines and wick boundaries. Format: $XX.XK. No intermediate labels. Active pool 
+list with wick_high, wick_low, centre_line Labels at correct Y coordinate. No overlapping labels. Updates when new pool 
+added. TimeAxis Horizontal axis. Past section shows historical timestamps. Right section shows projected candle times. 
+Candle timestamps, active timeframe Labels match actual candle timestamps. Right section labels correct for timeframe. 
+Now line aligns with current candle. NowLine Vertical line at current candle position. Heavier than pool lines. Moves 
+on each close. Label reads &quot;NOW&quot; with current timestamp. Current candle timestamp At correct X always. Moves 
+exactly one candle width on close. Label updates each candle. 3.3 Pool rectangle components Component Rule Inputs Test 
+Criteria PoolRectangle Rectangle from birth to death timestamp (or now line if active). Height = wick_high to wick_low. 
+Fill opacity = score/100. Red = resistance. Green = support. Pool {wick_high, wick_low, birth_candle, death_candle, 
+type, score} Y coordinates match wicks exactly. Opacity matches score/100. Birth X matches birth candle. Death X 
+matches death candle or now line. PoolCentreLine Dashed horizontal line at pool.centre_line. Spans same X as parent 
+rectangle. Line weight = score/25 (max 4px). Pool centre_line, score, type Centre line at correct Y. Dashed pattern 
+consistent. Weight proportional to score. BirthMarker Triangle at birth candle X, at pool boundary Y. Tooltip: birth 
+timestamp, initial score, departure strength. Pool birth_candle, type, initial_score Marker at exact birth candle. 
+Correct Y boundary. Tooltip shows all three fields. DeathMarker X mark at death candle X, at pool centre Y. Grey 
+always. Tooltip: death timestamp, death cause, final score. Pool death_candle, death_cause, final_score At exact death 
+candle. Grey regardless of pool type. Never shown on active pools. WeakeningIndicator Amber overlay on pool rectangle 
+when weakening. Opacity increases with degrade_factor. Pulsing animation. Pool weakening status, degrade_factor Appears 
+only when weakening detected. Pulsing complies with prefers-reduced-motion. PolarityFlipIndicator Rectangle colour 
+transitions red-to-green (or reverse) over 3 seconds on pool flip. Tooltip: flip timestamp, original type, new type. 
+Pool flip event, new_type Transition completes in 3 seconds. New colour matches new type. Tooltip correct. 
+LiquidationClusterOverlay Amber-tinted band within pool rectangle where Coinglass cluster detected. Dashed amber 
+border. Coinglass cluster data for pool price Within pool bounds only. Dashed border distinct from solid pool border. 
+Tooltip shows liquidation USD estimate. 3.4 Wire components Component Rule Inputs Test Criteria PriceWire Line 
+connecting candle closes over lookback. Thin (1.5px). Colour darker in trending sections, lighter in flat based on 
+wire_velocity. Behind pool rectangles in Z order. Smooth wire, wire_velocity per candle Wire closes match candle closes 
+exactly. Z order: wire behind rectangles, behind trade markers. AngleIndicator Top-right display: current angle in 
+degrees, Gann bracket name, strategy label. Background colour = bracket (red=no trade, amber=accumulation, 
+green=trending/breakout). MeasureWireAngle output, gann_bracket Updates each candle close. Background colour correct 
+for bracket. No decimal places on angle. RegimeGuardIndicator Prominent banner below angle indicator. 
+trade_permitted=false: red &quot;NO TRADE — [reason]&quot;. true: green &quot;ACTIVE — [strategy_label]&quot;. 
+Never absent. RegimeGuard output Red when angle&lt;26.25°. Green when &gt;=26.25°. Reason text matches RegimeGuard 
+output exactly. Always visible. 3.5 Right panel — tendency wires Component Rule Inputs Test Criteria 
+UpperPanelContainer Right section above gap. Purple-tinted background. Pool rectangle continues from left at same Y 
+coordinates. Contains: tendency wire, ghost candle, pool labels, planned trade marker. Pool above data, tendency wire 
+data Pool Y coordinates continuous from left. Updates when pool above changes. Background tint visible but not 
+obscuring. LowerPanelContainer Right section below gap. Green-tinted background at lower opacity than upper. Pool 
+rectangle continues. Pool below data, tendency wire data Same rules as upper. Background lighter opacity. Y coordinates 
+continuous. GapIndicator Empty space between panels. Width proportional to wire velocity. Label in gap centre: regime 
+name and velocity description. Gap width from wire_velocity, regime Gap proportional to velocity. Narrow=&quot;Ranging 
+— low velocity&quot;. Wide=&quot;Trending — high velocity&quot;. Min 5% canvas height. Max 40%. TendencyWireUpper 
+Wire showing expected price action on pool arrival. REVERSAL: enters from below, wick up, closes back near entry. 
+CONTINUATION: enters and continues. BREAKOUT: enters and extends. DrawUpperTendencyWire output, tendency_classification 
+Wire starts at pool lower boundary. Shape matches tendency. All coordinates within pool wick bounds. Visually distinct 
+from real candles. TendencyWireLower Mirror of upper for pool below. REVERSAL: enters from above, wick down, closes 
+back. DrawLowerTendencyWire output, tendency_classification Wire starts at pool upper boundary. All rules mirrored. 
+GhostCandle Semi-transparent candle within pool. Dashed border. Wick = estimated sweep depth. Label: &quot;Projected 
+entry&quot;. EstimateGhostCandleShape output Within pool wick bounds always. Dashed border distinct. Label visible. 
+Wick matches EstimateSweepDepth. PlannedTradeMarker Diamond at planned entry price. Arrow indicating direction. Label: 
+entry, stop, target pool, R:R ratio. Purple=dominant, green=subordinate. Planned trade parameters Diamond at correct 
+entry Y. Arrow correct direction. R:R calculated correctly. Colour matches arm dominance. PoolLabel Price label at pool 
+centre line in right panel. Shows: price, richness score %, pool type. Bold for dominant. Pool centre_line, score, 
+type, dominance At correct Y. Score as percentage. Bold for dominant, normal for subordinate. 3.6 Trade markers and 
+integrity display Component Rule Inputs Test Criteria TakenTradeMarker Filled circle on wire at entry candle. 
+Green=long, red=short. Size proportional to position size. White inner circle. Tooltip: entry, stop, target, R:R, size, 
+pool_id. Trade log entry Circle at correct wire position. Size proportional. Tooltip has all six fields. Only within 
+pool rectangle. MissedSetupMarker Hollow red circle with X through it at missed candle. Tooltip: pool_id, miss_reason, 
+estimated R:R, time. Missed setup log entry Hollow+X. Red always. Tooltip shows miss_reason category. Reduces integrity 
+score display. SkippedSetupMarker Hollow amber circle with centre dot at skipped candle. Tooltip: pool_id, skip_reason, 
+confluence_score. Skipped setup log entry Distinct from missed (amber vs red, dot vs X). Tooltip correct. Does NOT 
+reduce integrity score. IntegrityScoreDisplay Persistent top-left: score %, taken, skipped, missed. Green&gt;=80%, 
+amber 50-79%, red&lt;50%. Real-time updates. CalculateIntegrityScore output, counts Score matches output. Colour 
+thresholds correct. All four counts displayed. Updates within 100ms of event. 3.7 Daily report panel Component Rule 
+Inputs Test Criteria DailyReportTrigger Button or scheduled display. Overlays on main canvas without leaving view. Does 
+not disrupt live Braid. User trigger or scheduled time Accessible from main canvas. Loads &lt;1 second. Closes without 
+data loss. IntegritySummary Date, integrity score, taken/skipped/missed breakdown, top 3 missed setup analysis. Colour 
+coded by score. GenerateDailyIntegrityReport output All fields populated. Score matches live display. Top 3 misses 
+shown with reason. PoolMapView Visual timeline of all pools active during day. Birth/death events, score changes, 
+polarity flips. Colour by type. Full day pool history All pools shown. Birth and death events marked. Polarity flips 
+shown as colour transitions. TradeListView Table: time, pool, direction, entry, stop, target, result, R:R, 
+integrity_pass. Sortable by any column. Export to CSV. Trade log for the day All trades shown. All columns populated. 
+integrity_pass for each trade. Sortable. Document 4 Test Specification How correct implementation is verified for every 
+function and component 4.1 Testing philosophy Three tiers: unit tests verify individual function outputs against known 
+inputs. Integration tests verify functions call each other correctly. System tests verify the complete pipeline against 
+real historical BTC data where correct outputs are known from manual analysis. The auto-research framework (Karpathy 
+methodology) is the execution environment for all three tiers. A function that passes unit tests but fails the system 
+test has a specification gap. A function that passes the system test but fails unit tests has an implementation that is 
+accidentally correct and will break. The integrity score is the ultimate system test. If Zenny achieves &gt;= 80% 
+integrity on a known historical day where setups are manually identified and verified, the system is working. Below 80% 
+on a known-good day = a function is broken. 4.2 Unit test requirements Every function in Document 2 must have unit 
+tests covering: happy path with standard inputs, boundary conditions at exact threshold values (60 not 59, 14 not 
+13.9), edge cases (empty arrays, null inputs, zero values, max values), and failure cases with correct failure reasons. 
+All unit tests deterministic — no randomness, no network calls, all dependencies mocked. Suite completes in &lt; 30 
+seconds. 4.3 Integration test call chains FetchCandles → BuildPriceWire → SmoothWire → MeasureWireAngle → 
+MapAngleToGann → ClassifyStrategy → RegimeGuard. Output: correct strategy classification for known historical 
+candle sequences. FetchTicks → AggregateTicksByPrice → CalculateTickDensity → DetectTickCluster → 
+DetectPoolBirth. Output: birth event at correct timestamp for known tick cluster injection. ValidateCandidatePool → 
+SetPoolBoundaries → all Score* functions → AggregatePoolScore → ValidatePoolThreshold. Output: correct score and 
+pass/fail for three known historical pools. DetectPoolWeakening → DetectPoolDeath → ApplyPolarityFlip → 
+FilterPoolByMinimumScore. Output: correct lifecycle events for pool that weakens and dies on known historical data. 
+CalculatePullScore → RankPoolsByPull → DetermineArmDominance → CheckArmExists. Output: correct dominance 
+assignment for known pool pairs. MeasureApproachVelocity → ClassifyApproach → EstimateSweepDepth → 
+EstimateRejectionSpeed → ClassifyTendency → EstimateGhostCandleShape → DrawUpperTendencyWire. Output: correct 
+tendency wire for three known approach scenarios. 4.4 System test — known historical day Select a historical BTC day 
+with at least 5 manually-identified valid setups. This is ground truth. Run full Zenny pipeline and verify: Every 
+manually identified pool appears in pool list with score &gt;= 60 Every pool&apos;s wick_high and wick_low within 0.1% 
+of manually measured values Pool birth timestamps within 2 candles of manually identified birth points Pool death 
+timestamps match manually identified death candles exactly Wire angle matches manually measured angle within 3 degrees 
+Gann bracket correct for that day&apos;s market behaviour Integrity score &gt;= 80% compared to manually identified 
+setups All trade markers inside pool rectangles — zero exceptions Tendency wire classification matches what actually 
+happened for each pool interaction 4.5 Performance requirements Full pipeline update on candle close: &lt; 500ms 
+end-to-end Pool score recalculation: &lt; 100ms per pool Order book depth fetch and parse: &lt; 200ms Tick stream 
+processing: &lt; 50ms per tick Full unit test suite: &lt; 30 seconds Daily report generation: &lt; 1 second Braid 
+canvas full render: &lt; 200ms Braid canvas incremental update: &lt; 50ms 4.6 Auto-research framework — per-cycle 
+checks Retrospective setup detection: scan last 24 hours for valid setups not flagged. Any found = missed setup logged, 
+integrity score updated. Tendency wire accuracy: compare previous pool interaction prediction to actual. Log 
+MATCH/MISMATCH/PARTIAL. Update match rate. Pool score drift: flag any pool whose score changed &gt;30 points without 
+corresponding touch or order book event. RegimeGuard audit: verify every trade in last 24 hours has RegimeGuard pass 
+record. Any trade without = critical integrity failure. Entry location audit: verify every trade entry inside its pool 
+rectangle. Any outside = critical integrity failure. 4.7 UI component tests Every UI component in Document 3 must pass: 
+correct data (displays exactly specified inputs), correct position (X and Y match time and price), correct colour 
+(encoding rules respected), correct interaction (tooltips within 100ms, all fields present, no nulls), dark mode (all 
+components correct in both modes), responsive (correct at 320px to 2560px width), reduced motion (animations stopped), 
+and performance (no frame drops below 60fps under full load). 4.8 Regression requirements After any code change, all 
+five must pass before deployment: full unit test suite, all six integration call chains, system test &gt;= 80%, 
+performance benchmarks within limits, UI visual tests. No deployment without all five passing. CI/CD enforces this 
+automatically. End of Zenny System Specification — v1.0 — April 2026 

@@ -8,7 +8,7 @@ import type {
   CandleQuery,
   OrderBookDepthQuery,
 } from "./providerInterface";
-import type { RawOrderBookDepth } from "../../analysis/orderbook/types";
+import type { RawOrderBookDepth } from "../types";
 
 export class MockProvider implements MarketDataProvider {
   readonly name = "mock" as const;

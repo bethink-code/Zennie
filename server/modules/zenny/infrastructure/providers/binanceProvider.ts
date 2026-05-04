@@ -10,7 +10,7 @@ import type {
   CandleQuery,
   OrderBookDepthQuery,
 } from "./providerInterface";
-import type { RawOrderBookDepth } from "../../analysis/orderbook/types";
+import type { RawOrderBookDepth } from "../types";
 import { CandleCache } from "../cache/candleCache";
 import { fetchKlinesRest } from "../binance/rest/fetchKlinesRest";
 import { fetchDepthRest } from "../binance/rest/fetchDepthRest";
@@ -81,8 +81,15 @@ export class BinanceProvider implements MarketDataProvider {
 
   async getCandles(query: CandleQuery): Promise<Candle[]> {
     // Try cache first
-    const cached = this.cache.read(query.symbol, query.timeframe, query.count);
-    if (cached !== null) return cached;
+    if (query.endTimeMs === undefined) {
+      const cached = this.cache.read(
+        query.symbol,
+        query.timeframe,
+        query.count,
+        this.restDeps.nowMs(),
+      );
+      if (cached !== null) return cached;
+    }
 
     // Cache miss — fetch from Binance
     const fresh = await fetchKlinesRest(

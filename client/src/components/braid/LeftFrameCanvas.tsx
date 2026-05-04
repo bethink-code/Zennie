@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import type { AnalysisStateClient, LevelStrengthClient } from "./types";
+import { CHART_PAD, PRICE_PAD_FRACTION } from "./chartGeometry";
 
 // Palette — extracted from the mockup
 const C = {
@@ -32,8 +33,9 @@ const C = {
   nowLine: "rgba(61,61,58,0.45)",
 };
 
-const PAD = { l: 60, r: 100, t: 20, b: 32 };
-const H = 540;
+const PAD = CHART_PAD;
+// Height is passed as a prop — set dynamically from viewport in Braid.tsx
+const DEFAULT_H = 800;
 
 // Timeframe hierarchy — higher number = higher timeframe. A chart ALWAYS
 // shows its own TF's levels AND every higher TF's levels. It NEVER shows
@@ -62,6 +64,14 @@ interface Props {
   showCurrentTf?: boolean;
   showOtherTfs?: boolean;
   showPools?: boolean;
+  showSweptPools?: boolean;
+  showDeadPools?: boolean;
+  height?: number;
+  // Aggregate strength threshold — levels with passes.aggregate.score
+  // below this are hidden from the chart entirely (and their pools too).
+  // 0 = show all (default), 1 = only the strongest. Driven by the slider
+  // in PassPlayground.
+  strengthThreshold?: number;
 }
 
 // Off-screen indicator cap — only show the N closest to the visible range
@@ -71,6 +81,7 @@ const OFF_SCREEN_LIMIT = 1;
 
 interface Dims {
   W: number;
+  H: number;
   cw: number;
   ch: number;
   minP: number;
@@ -90,6 +101,10 @@ export function LeftFrameCanvas({
   showCurrentTf = true,
   showOtherTfs = true,
   showPools = true,
+  showSweptPools = false,
+  showDeadPools = false,
+  height: H = DEFAULT_H,
+  strengthThreshold = 0,
 }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -117,7 +132,7 @@ export function LeftFrameCanvas({
     const candlePrices: number[] = state.candles.flatMap((c) => [c.high, c.low]);
     let minP = Math.min(...candlePrices);
     let maxP = Math.max(...candlePrices);
-    const padPrice = (maxP - minP) * 0.02;
+    const padPrice = (maxP - minP) * PRICE_PAD_FRACTION;
     minP -= padPrice;
     maxP += padPrice;
     const pRange = maxP - minP;
@@ -126,6 +141,7 @@ export function LeftFrameCanvas({
     const halfWidth = Math.max(1, Math.floor(candleWidth / 2));
     return {
       W: width,
+      H,
       cw,
       ch,
       minP,
@@ -152,14 +168,26 @@ export function LeftFrameCanvas({
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0); // reset before each paint
     ctx.scale(dpr, dpr);
-    drawCanvas(ctx, state, dims, { showPools, chartType, targetPoints });
-  }, [state, showPools, chartType, targetPoints, dims]);
+    drawCanvas(ctx, state, dims, {
+      showPools,
+      showSweptPools,
+      showDeadPools,
+      chartType,
+      targetPoints,
+    });
+  }, [
+    state,
+    showPools,
+    showSweptPools,
+    showDeadPools,
+    chartType,
+    targetPoints,
+    dims,
+  ]);
 
-  // Render every level that passes the hierarchy filter. The server-side
-  // RDP detector now emits a small leg-skeleton set per TF (5 vertices),
-  // so there's no need to further filter on the client by broken-ness,
-  // distance, or priority. Every vertex IS a level — red for peaks, green
-  // for troughs, broken or not.
+  // Render every structural level that passes the hierarchy filter.
+  // Creation/filtering stays in the engine; the client only applies
+  // display toggles and aggregate visibility.
   //
   // Hierarchy rule (unchanged): a chart shows its own TF's levels + higher
   // TFs' levels, never lower. `Current TF` and `Higher TFs` toggles control
@@ -175,13 +203,20 @@ export function LeftFrameCanvas({
     const offAbove: typeof state.levels = [];
     const offBelow: typeof state.levels = [];
     for (const level of state.levels) {
-      if (level.graduatedToPoolId !== null && showPools) continue;
       const levelRank = TF_RANK[level.sourceTimeframe] ?? -1;
       if (levelRank < primaryRank) continue;
       const isPrimary = levelRank === primaryRank;
       const isHigherTf = levelRank > primaryRank;
       if (isPrimary && !showCurrentTf) continue;
       if (isHigherTf && !showOtherTfs) continue;
+
+      // Aggregate strength filter — hide levels below threshold. Only
+      // applies when an aggregate score has been computed (pass enabled).
+      // Without aggregate data we don't filter — equivalent to threshold 0.
+      if (strengthThreshold > 0) {
+        const aggScore = level.passes?.aggregate?.score;
+        if (aggScore !== undefined && aggScore < strengthThreshold) continue;
+      }
 
       const y = dims.toY(level.price);
       if (y < PAD.t) offAbove.push(level);
@@ -197,7 +232,34 @@ export function LeftFrameCanvas({
     showCurrentTf,
     showOtherTfs,
     showPools,
+    strengthThreshold,
     dims,
+  ]);
+
+  // Swing markers are diagnostic: they answer "which candle did the engine
+  // identify?" Keep them independent from pool/aggregate line filtering so
+  // a real pivot candle does not disappear just because its line became a
+  // pool, got down-scored, or was hidden by the strength slider.
+  const swingMarkerLevels = useMemo(() => {
+    if (!dims) return [];
+    const primaryRank = TF_RANK[state.primaryTimeframe] ?? 0;
+    return state.levels.filter((level) => {
+      if (level.source !== "swing") return false;
+      const levelRank = TF_RANK[level.sourceTimeframe] ?? -1;
+      if (levelRank < primaryRank) return false;
+      const isPrimary = levelRank === primaryRank;
+      const isHigherTf = levelRank > primaryRank;
+      if (isPrimary && !showCurrentTf) return false;
+      if (isHigherTf && !showOtherTfs) return false;
+      const y = dims.toY(level.price);
+      return y >= PAD.t && y <= PAD.t + dims.ch;
+    });
+  }, [
+    dims,
+    showCurrentTf,
+    showOtherTfs,
+    state.levels,
+    state.primaryTimeframe,
   ]);
 
   // Click anywhere in the chart area → select that candle.
@@ -271,10 +333,9 @@ export function LeftFrameCanvas({
           {/* Swing-candle markers — outline rects around the candles the
               algorithm identified as swing pivots. Red = swing high,
               green = swing low. Only shown in candles mode: on the line
-              chart they're stale (from the old server-side detector, not
-              from RDP) and would pollute the alignment view. */}
+              chart they would pollute the alignment view. */}
           {chartType === "candles" &&
-            partitioned.onScreen.map((level) => (
+            swingMarkerLevels.map((level) => (
               <SwingMarker
                 key={`mark-${level.id}`}
                 level={level}
@@ -282,10 +343,67 @@ export function LeftFrameCanvas({
                 dims={dims}
               />
             ))}
+          {/* Last-leg swing markers — structural reference lines at the
+              ZigZag swing prices. Drawn whenever the lastLeg pass is
+              enabled (passInfo.lastLeg present), independent of TF/Higher
+              gating because they're structural, not source-TF-bound.
+              Coloured by current price relationship: above current close
+              = resistance (red), below = support (green). The original
+              swing TYPE is preserved in data attributes for inspection. */}
+          {state.passInfo?.lastLeg?.swings.map((swing, i) => {
+            const y = dims.toY(swing.price);
+            if (y < PAD.t || y > PAD.t + dims.ch) return null;
+            const lastClose =
+              state.candles.length > 0
+                ? state.candles[state.candles.length - 1].close
+                : swing.price;
+            const isAboveCurrentPrice = swing.price > lastClose;
+            const stroke = isAboveCurrentPrice
+              ? "rgba(226,75,74,0.8)"
+              : "rgba(29,158,117,0.8)";
+            const sideLabel = isAboveCurrentPrice ? "R" : "S";
+            const startX = dims.toX(
+              Math.max(0, Math.min(dims.N - 1, swing.index)),
+            );
+            return (
+              <g
+                key={`leg-${i}-${swing.index}-${swing.price}`}
+                data-codesign-element="last-leg-swing"
+                data-swing-type={swing.type}
+                data-effective-side={
+                  isAboveCurrentPrice ? "RESISTANCE" : "SUPPORT"
+                }
+                data-swing-price={swing.price}
+              >
+                <line
+                  x1={startX}
+                  y1={y}
+                  x2={PAD.l + dims.cw}
+                  y2={y}
+                  stroke={stroke}
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  pointerEvents="none"
+                />
+                <text
+                  x={startX + 4}
+                  y={y - 3}
+                  fill={stroke}
+                  fontSize={10}
+                  fontWeight={700}
+                  fontFamily="system-ui, sans-serif"
+                  pointerEvents="none"
+                >
+                  {sideLabel} ${swing.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </text>
+              </g>
+            );
+          })}
         </svg>
       )}
       {/* DOM overlay — text labels (TF tags + off-screen indicators).
-          Pools will move here when we get to them. */}
+          Pool rectangles intentionally remain canvas-rendered; structural
+          level tags live in DOM for crisp labels and inspection hooks. */}
       {dims && (
         <div
           className="absolute top-0 left-0 w-full h-full"
@@ -333,10 +451,12 @@ export function LeftFrameCanvas({
           candle={selectedCandle}
           symbol={state.symbol}
           timeframe={state.primaryTimeframe}
-          side={
-            dims.toX(selectedCandleIndex) > PAD.l + dims.cw / 2
-              ? "left"
-              : "right"
+          candleX={dims.toX(selectedCandleIndex)}
+          chartWidth={dims.W}
+          verticalSide={
+            (selectedCandle.high + selectedCandle.low) / 2 > (dims.minP + dims.maxP) / 2
+              ? "bottom"
+              : "top"
           }
           onClose={() => setSelectedCandleIndex(null)}
         />
@@ -355,14 +475,18 @@ function CandleInfoPopup({
   candle,
   symbol,
   timeframe,
-  side,
+  candleX,
+  chartWidth,
+  verticalSide,
   onClose,
 }: {
   index: number;
   candle: AnalysisStateClient["candles"][number];
   symbol: string;
   timeframe: string;
-  side: "left" | "right";
+  candleX: number;
+  chartWidth: number;
+  verticalSide: "top" | "bottom";
   onClose: () => void;
 }) {
   const isoTime = new Date(candle.openTime)
@@ -378,13 +502,13 @@ function CandleInfoPopup({
       onClick={stop}
       style={{
         position: "absolute",
-        top: 8,
-        ...(side === "left" ? { left: PAD.l + 4 } : { right: 110 }),
+        ...(verticalSide === "top" ? { top: 8 } : { bottom: PAD.b + 8 }),
+        left: Math.max(PAD.l, Math.min(candleX - 110, chartWidth - 240)),
         background: "white",
         border: "1px solid rgba(0,0,0,0.15)",
         borderRadius: 6,
         padding: "8px 12px",
-        fontSize: "11px",
+        fontSize: "12px",
         fontFamily: "system-ui, sans-serif",
         boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
         pointerEvents: "auto",
@@ -425,7 +549,7 @@ function CandleInfoPopup({
       </div>
       <div
         style={{
-          fontSize: "10px",
+          fontSize: "11px",
           color: "rgba(0,0,0,0.55)",
           marginBottom: 6,
         }}
@@ -459,7 +583,7 @@ function CandleInfoPopup({
         }}
         style={{
           marginTop: 8,
-          fontSize: "10px",
+          fontSize: "11px",
           padding: "3px 10px",
           border: "1px solid rgba(0,0,0,0.15)",
           borderRadius: 4,
@@ -537,9 +661,28 @@ function LevelLine({
     idx < 0 ? PAD.l : dims.toX(Math.max(0, Math.min(dims.N - 1, idx)));
   const endX = PAD.l + dims.cw;
   const width = endX - startX;
-  const opacity = levelOpacity(level.strength);
-  const visibleHeight = strengthLineHeightPx(level.strength);
-  const rgb = level.side === "RESISTANCE" ? "226,75,74" : "29,158,117";
+
+  // Multi-pass prominence — drives both opacity and thickness so levels
+  // rated "important" by enabled passes pop, others fade. When no passes
+  // are present (all disabled), prominence is 1.0 and rendering matches
+  // the pre-pass baseline (no regression).
+  const prominence = computeProminence(level);
+
+  // Effective side from polarity flip pass (when enabled). Falls back
+  // to the level's original side. DEAD = the level has been crossed
+  // multiple times; render as muted gray.
+  const polarity = level.passes?.polarityFlip;
+  const effectiveSide = polarity?.effectiveSide ?? level.side;
+
+  const baseOpacity = levelOpacity(level.strength);
+  const baseHeight = strengthLineHeightPx(level.strength);
+  const opacity = baseOpacity * (0.15 + 0.85 * prominence);
+  const visibleHeight = Math.max(1, baseHeight * (0.5 + 2 * prominence));
+
+  let rgb: string;
+  if (effectiveSide === "DEAD") rgb = "120,120,120";
+  else if (effectiveSide === "RESISTANCE") rgb = "226,75,74";
+  else rgb = "29,158,117";
 
   return (
     <rect
@@ -553,14 +696,54 @@ function LevelLine({
       data-level-id={level.id}
       data-source-tf={level.sourceTimeframe}
       data-side={level.side}
+      data-effective-side={effectiveSide}
+      data-flipped={polarity?.flipped ? "true" : "false"}
       data-original-price={level.price}
       data-wick-price={level.wickPrice}
       data-confluence-count={level.confluenceCount}
       data-matching-tfs={level.matchingTimeframes.join(",")}
       data-strength={level.strength}
-      data-graduated-pool-id={level.graduatedToPoolId ?? ""}
+      data-prominence={prominence.toFixed(3)}
     />
   );
+}
+
+// computeProminence — combines enabled-pass results into a single 0..1
+// score the renderer uses to scale opacity + thickness. Rule: any active
+// pass that says "this matters" lifts prominence (max-of). Recency's
+// wouldFilter knocks it back down.
+//
+// When no passes are present (all disabled at the route level), the
+// function returns 1.0 — meaning the chart renders identically to the
+// pre-pass behaviour. Toggling any pass on starts to differentiate
+// levels visually.
+function computeProminence(
+  level: AnalysisStateClient["levels"][number],
+): number {
+  const passes = level.passes;
+  if (!passes) return 1;
+  const recency = passes.recency;
+  const lastLeg = passes.lastLeg;
+  const touchCount = passes.touchCount;
+
+  if (!recency && !lastLeg && !touchCount) return 1;
+
+  // Each pass votes for prominence independently; max-of wins. A pass
+  // that thinks the level doesn't matter contributes 0 (its own opinion),
+  // not a multiplier that overrides other passes. So a level filtered by
+  // recency but flagged by lastLeg as a structural swing still shows.
+  let p = 0;
+  if (recency) {
+    // Recency votes its value, or 0 if it'd filter.
+    p = Math.max(p, recency.wouldFilter ? 0 : recency.value);
+  }
+  if (lastLeg) p = Math.max(p, lastLeg.value);
+  if (touchCount) {
+    // Normalise touch count: 0 → 0, 3+ → 1.
+    const tn = Math.min(1, touchCount.value / 3);
+    p = Math.max(p, tn);
+  }
+  return Math.max(0, Math.min(1, p));
 }
 
 // DOM tag for a level — kept as a div so browser font rendering stays crisp
@@ -588,7 +771,12 @@ function LevelTag({
   const y = dims.toY(level.price);
   const endX = PAD.l + dims.cw;
   const opacity = levelOpacity(level.strength);
-  const rgb = level.side === "RESISTANCE" ? "226,75,74" : "29,158,117";
+  const polarity = level.passes?.polarityFlip;
+  const effectiveSide = polarity?.effectiveSide ?? level.side;
+  let rgb: string;
+  if (effectiveSide === "DEAD") rgb = "120,120,120";
+  else if (effectiveSide === "RESISTANCE") rgb = "226,75,74";
+  else rgb = "29,158,117";
   const isProminent =
     level.strength === "very_strong" || level.strength === "strong";
 
@@ -598,7 +786,7 @@ function LevelTag({
         position: "absolute",
         top: y - 6,
         left: endX + 4,
-        fontSize: "10px",
+        fontSize: "11px",
         color: `rgba(${rgb},${Math.min(1, opacity + 0.25)})`,
         fontWeight: isProminent ? 500 : 400,
         fontFamily: "system-ui, sans-serif",
@@ -607,6 +795,7 @@ function LevelTag({
       }}
       data-codesign-element="level-tag"
       data-level-tag-for={level.id}
+      data-effective-side={effectiveSide}
     >
       {tag}
     </div>
@@ -649,7 +838,10 @@ function OffScreenStack({
               position: "absolute",
               left: x,
               top: baseY + yOffset - 6,
-              fontSize: "9px",
+              maxWidth: PAD.r - 8,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              fontSize: "11px",
               fontWeight: 500,
               color: `rgba(${rgb},${opacity})`,
               whiteSpace: "nowrap",
@@ -678,7 +870,10 @@ function OffScreenStack({
               (position === "above" ? levels.length : -levels.length) *
                 lineHeight -
               6,
-            fontSize: "9px",
+            maxWidth: PAD.r - 8,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            fontSize: "11px",
             color: "rgba(136,135,128,0.7)",
             fontFamily: "system-ui, sans-serif",
             pointerEvents: "none",
@@ -700,18 +895,20 @@ function drawCanvas(
   dims: Dims,
   opts: {
     showPools: boolean;
+    showSweptPools: boolean;
+    showDeadPools: boolean;
     chartType: "candles" | "line";
     targetPoints: number;
   },
 ): void {
   ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, dims.W, H);
+  ctx.fillRect(0, 0, dims.W, dims.H);
 
   if (state.candles.length === 0) {
     ctx.fillStyle = C.txt;
     ctx.font = "12px system-ui";
     ctx.textAlign = "center";
-    ctx.fillText("no candles", dims.W / 2, H / 2);
+    ctx.fillText("no candles", dims.W / 2, dims.H / 2);
     return;
   }
 
@@ -736,26 +933,96 @@ function drawCanvas(
     ctx.fillText(formatPrice(p), PAD.l - 5, gy + 3.5);
   }
 
-  // Active pools (translucent, behind candles)
+  // Active and swept pools (translucent, behind candles). Active pools
+  // extend to the chart edge; swept pools stop at the sweep candle because
+  // their wick-side liquidity has already been consumed, even if the body
+  // line has not structurally broken.
+  const renderablePool = (pool: AnalysisStateClient["pools"][number]) => {
+    const yTop = dims.toY(pool.wickHigh);
+    const yBot = dims.toY(pool.wickLow);
+    return !(yBot < PAD.t || yTop > PAD.t + dims.ch);
+  };
   const activePools = opts.showPools
-    ? state.pools.filter((p) => p.status === "active")
+    ? selectPoolsForRender(
+        state.pools.filter(
+          (p) =>
+            p.status === "active" &&
+            renderablePool(p),
+        ),
+      )
     : [];
-  const deadPools = opts.showPools
-    ? state.pools.filter((p) => p.status === "dead")
-    : [];
+  const sweptPools =
+    opts.showPools && opts.showSweptPools
+      ? selectPoolsForRender(
+          state.pools.filter(
+            (p) =>
+              p.status === "swept" &&
+              renderablePool(p),
+          ),
+        )
+      : [];
+  const deadPools =
+    opts.showPools && opts.showDeadPools
+      ? selectPoolsForRender(
+          state.pools.filter((p) => p.status === "dead" && renderablePool(p)),
+        )
+      : [];
+
+  for (const pool of [...sweptPools, ...deadPools]) {
+    const yTop = dims.toY(pool.wickHigh);
+    const yBot = dims.toY(pool.wickLow);
+    const birthIdx = pool.birthCandleIndexOnPrimary;
+    const endIdx =
+      pool.status === "dead"
+        ? (pool.deathCandleIndexOnPrimary ?? pool.sweptCandleIndexOnPrimary)
+        : pool.sweptCandleIndexOnPrimary;
+    const x1 =
+      birthIdx < 0
+        ? PAD.l
+        : dims.toX(Math.max(0, Math.min(dims.N - 1, birthIdx)));
+    const x2 =
+      endIdx !== null && endIdx !== undefined
+        ? dims.toX(Math.max(0, Math.min(dims.N - 1, endIdx)))
+        : PAD.l + dims.cw;
+    const rgb = pool.type === "RESISTANCE" ? "226,75,74" : "29,158,117";
+    const w = Math.max(1, x2 - x1);
+    const h = yBot - yTop;
+    const fillOpacity = pool.status === "dead" ? 0.035 : 0.055;
+    const strokeOpacity = pool.status === "dead" ? 0.18 : 0.26;
+    ctx.fillStyle = `rgba(${rgb},${fillOpacity})`;
+    ctx.fillRect(x1, yTop, w, h);
+    ctx.strokeStyle = `rgba(${rgb},${strokeOpacity})`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(pool.status === "dead" ? [4, 3] : []);
+    ctx.strokeRect(x1, yTop, w, h);
+    ctx.setLineDash([]);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x1, yTop, w, h);
+    ctx.clip();
+    ctx.strokeStyle = `rgba(${rgb},0.14)`;
+    ctx.lineWidth = 1;
+    for (let x = x1 - h; x < x1 + w + h; x += 8) {
+      ctx.beginPath();
+      ctx.moveTo(x, yBot);
+      ctx.lineTo(x + h, yTop);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   for (const pool of activePools) {
     const yTop = dims.toY(pool.wickHigh);
     const yBot = dims.toY(pool.wickLow);
-    if (yBot < PAD.t || yTop > PAD.t + dims.ch) continue;
     const idx = pool.birthCandleIndexOnPrimary;
     const x1 =
       idx < 0 ? PAD.l : dims.toX(Math.max(0, Math.min(dims.N - 1, idx)));
     const x2 = PAD.l + dims.cw;
-    const fill = pool.type === "RESISTANCE" ? C.resAlive : C.supAlive;
-    const border = pool.type === "RESISTANCE" ? C.resAliveBdr : C.supAliveBdr;
-    ctx.fillStyle = fill;
+    const rgb = pool.type === "RESISTANCE" ? "226,75,74" : "29,158,117";
+    ctx.fillStyle = `rgba(${rgb},0.11)`;
     ctx.fillRect(x1, yTop, x2 - x1, yBot - yTop);
-    ctx.strokeStyle = border;
+    ctx.strokeStyle = `rgba(${rgb},0.52)`;
     ctx.lineWidth = 1;
     ctx.strokeRect(x1, yTop, x2 - x1, yBot - yTop);
   }
@@ -828,24 +1095,43 @@ function drawCanvas(
     }
   }
 
-  // Dead pools (opaque, on top of candles)
-  for (const pool of deadPools) {
-    const yTop = dims.toY(pool.wickHigh);
-    const yBot = dims.toY(pool.wickLow);
-    const x1 = dims.toX(
-      Math.max(0, Math.min(dims.N - 1, pool.birthCandleIndexOnPrimary)),
-    );
-    const x2 =
-      pool.deathCandleIndexOnPrimary !== null
-        ? dims.toX(pool.deathCandleIndexOnPrimary)
-        : PAD.l + dims.cw;
-    const fill = pool.type === "RESISTANCE" ? C.resDead : C.supDead;
-    const border = pool.type === "RESISTANCE" ? C.resDeadBdr : C.supDeadBdr;
-    ctx.fillStyle = fill;
-    ctx.fillRect(x1, yTop, x2 - x1, yBot - yTop);
-    ctx.strokeStyle = border;
+  // Mark price line — dashed line at the last candle's close + bold price label
+  if (state.candles.length > 0) {
+    const lastClose = state.candles[state.candles.length - 1].close;
+    const markY = dims.toY(lastClose);
+    ctx.strokeStyle = "rgba(61,61,58,0.3)";
     ctx.lineWidth = 1;
-    ctx.strokeRect(x1, yTop, x2 - x1, yBot - yTop);
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(PAD.l, markY);
+    ctx.lineTo(PAD.l + dims.cw, markY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Bold price label on both Y axes
+    ctx.fillStyle = C.txtP;
+    ctx.font = "bold 11px system-ui";
+    ctx.textAlign = "right";
+    ctx.fillText(formatPrice(lastClose), PAD.l - 4, markY + 4);
+
+    const rhsLabel = formatPrice(lastClose);
+    const rhsW = Math.min(PAD.r - 12, Math.max(52, ctx.measureText(rhsLabel).width + 14));
+    const rhsX = PAD.l + dims.cw + PAD.r - rhsW - 4;
+    const rhsY = Math.max(PAD.t + 1, Math.min(PAD.t + dims.ch - 17, markY - 9));
+    ctx.strokeStyle = "rgba(61,61,58,0.38)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(PAD.l + dims.cw, markY);
+    ctx.lineTo(rhsX, markY);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(61,61,58,0.92)";
+    ctx.fillRect(rhsX, rhsY, rhsW, 18);
+    ctx.strokeStyle = "rgba(61,61,58,0.92)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rhsX, rhsY, rhsW, 18);
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "left";
+    ctx.fillText(rhsLabel, rhsX + 7, rhsY + 13);
   }
 
   // Border
@@ -971,6 +1257,38 @@ function formatPrice(p: number): string {
   if (p >= 1_000) return "$" + p.toFixed(0);
   if (p >= 1) return "$" + p.toFixed(2);
   return "$" + p.toFixed(4);
+}
+
+function selectPoolsForRender<T extends AnalysisStateClient["pools"][number]>(
+  pools: T[],
+): T[] {
+  const bySide = {
+    RESISTANCE: [] as T[],
+    SUPPORT: [] as T[],
+  };
+  for (const pool of pools) bySide[pool.type].push(pool);
+  return [
+    ...selectPoolsForSide(bySide.RESISTANCE),
+    ...selectPoolsForSide(bySide.SUPPORT),
+  ];
+}
+
+function selectPoolsForSide<T extends AnalysisStateClient["pools"][number]>(
+  pools: T[],
+): T[] {
+  const maxPerSide = 8;
+  return [...pools]
+    .sort((a, b) => {
+      const tf = (TF_RANK[b.sourceTimeframe] ?? 0) - (TF_RANK[a.sourceTimeframe] ?? 0);
+      if (tf !== 0) return tf;
+      const pull = (b.pull?.decayed ?? 0) - (a.pull?.decayed ?? 0);
+      if (pull !== 0) return pull;
+      const strength = strengthRank(b.strength) - strengthRank(a.strength);
+      if (strength !== 0) return strength;
+      return b.birthCandleIndexOnPrimary - a.birthCandleIndexOnPrimary;
+    })
+    .slice(0, maxPerSide)
+    .sort((a, b) => a.birthCandleIndexOnPrimary - b.birthCandleIndexOnPrimary);
 }
 
 function levelOpacity(strength: LevelStrengthClient): number {

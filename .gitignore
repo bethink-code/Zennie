@@ -9,3 +9,4 @@ dist-server
 .vscode
 .idea
 drizzle/meta
+.claude/settings.local.json

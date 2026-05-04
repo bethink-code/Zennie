@@ -3,7 +3,7 @@
 // Analysis functions take this interface as a parameter so they're testable without network.
 
 import type { Candle, Timeframe } from "../../../../../shared/zennyTypes";
-import type { RawOrderBookDepth } from "../../analysis/orderbook/types";
+import type { RawOrderBookDepth } from "../types";
 
 export interface CandleQuery {
   symbol: string;

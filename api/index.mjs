@@ -16,12 +16,20 @@ __export(schema_exports, {
   auditLogs: () => auditLogs,
   autoresearchIterations: () => autoresearchIterations,
   autoresearchSessions: () => autoresearchSessions,
+  binanceFundingRates: () => binanceFundingRates,
+  binanceLiquidations: () => binanceLiquidations,
+  binanceLongShortRatio: () => binanceLongShortRatio,
+  binanceOi: () => binanceOi,
   botDecisions: () => botDecisions,
   botStatusEnum: () => botStatusEnum,
   cachedSymbols: () => cachedSymbols,
   exchangeKeys: () => exchangeKeys,
   experimentRuns: () => experimentRuns,
   experiments: () => experiments,
+  hyblockCaptures: () => hyblockCaptures,
+  hyblockLiqLevels: () => hyblockLiqLevels,
+  hyblockOhlc: () => hyblockOhlc,
+  hyblockcaptureEnum: () => hyblockcaptureEnum,
   insertAccessRequestSchema: () => insertAccessRequestSchema,
   insertInviteSchema: () => insertInviteSchema,
   insertMarketPairSchema: () => insertMarketPairSchema,
@@ -67,7 +75,7 @@ import {
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
-var regimeEnum, botStatusEnum, tradeSideEnum, tradeStatusEnum, setupModeEnum, accessRequestStatusEnum, sessions, users, invitedUsers, accessRequests, auditLogs, tenants, tenantConfigs, exchangeKeys, marketPairs, trades, botDecisions, riskEvents, experiments, experimentRuns, autoresearchSessions, autoresearchIterations, cachedSymbols, llmUsage, regimeChanges, usersRelations, tenantsRelations, insertUserSchema, insertAccessRequestSchema, insertInviteSchema, insertMarketPairSchema, regimeChangeSchema, zennyTimeframeEnum, zennyPoolTypeEnum, zennyPoolStatusEnum, zennyDeathReasonEnum, zennyLevelSourceEnum, zennyLevels, zennyPools;
+var regimeEnum, botStatusEnum, tradeSideEnum, tradeStatusEnum, setupModeEnum, accessRequestStatusEnum, sessions, users, invitedUsers, accessRequests, auditLogs, tenants, tenantConfigs, exchangeKeys, marketPairs, trades, botDecisions, riskEvents, experiments, experimentRuns, autoresearchSessions, autoresearchIterations, cachedSymbols, llmUsage, regimeChanges, usersRelations, tenantsRelations, insertUserSchema, insertAccessRequestSchema, insertInviteSchema, insertMarketPairSchema, regimeChangeSchema, zennyTimeframeEnum, zennyPoolTypeEnum, zennyPoolStatusEnum, zennyDeathReasonEnum, zennyLevelSourceEnum, zennyLevels, zennyPools, hyblockcaptureEnum, hyblockCaptures, hyblockOhlc, hyblockLiqLevels, binanceOi, binanceFundingRates, binanceLongShortRatio, binanceLiquidations;
 var init_schema = __esm({
   "shared/schema.ts"() {
     "use strict";
@@ -601,6 +609,124 @@ var init_schema = __esm({
         index("zenny_pools_tenant_symbol_tf_idx").on(t.tenantId, t.symbol, t.timeframe),
         index("zenny_pools_status_idx").on(t.status),
         index("zenny_pools_birth_time_idx").on(t.birthCandleTime)
+      ]
+    );
+    hyblockcaptureEnum = pgEnum("hyblock_capture_source", [
+      "redux_harvest",
+      "manual_entry"
+    ]);
+    hyblockCaptures = pgTable(
+      "hyblock_captures",
+      {
+        id: uuid("id").primaryKey().defaultRandom(),
+        exchange: varchar("exchange", { length: 32 }).notNull(),
+        coin: varchar("coin", { length: 16 }).notNull(),
+        lookback: varchar("lookback", { length: 32 }).notNull(),
+        startDate: timestamp("start_date").notNull(),
+        endDate: timestamp("end_date").notNull(),
+        barCount: integer("bar_count").notNull(),
+        source: hyblockcaptureEnum("source").notNull().default("redux_harvest"),
+        payload: jsonb("payload").notNull(),
+        capturedAt: timestamp("captured_at").notNull().defaultNow()
+      },
+      (t) => [
+        index("hyblock_captures_coin_lookback_idx").on(t.coin, t.lookback),
+        index("hyblock_captures_exchange_coin_idx").on(t.exchange, t.coin)
+      ]
+    );
+    hyblockOhlc = pgTable(
+      "hyblock_ohlc",
+      {
+        id: uuid("id").primaryKey().defaultRandom(),
+        captureId: uuid("capture_id").notNull().references(() => hyblockCaptures.id, { onDelete: "cascade" }),
+        exchange: varchar("exchange", { length: 32 }).notNull(),
+        coin: varchar("coin", { length: 16 }).notNull(),
+        barTime: timestamp("bar_time").notNull(),
+        open: numeric("open", { precision: 20, scale: 8 }).notNull(),
+        high: numeric("high", { precision: 20, scale: 8 }).notNull(),
+        low: numeric("low", { precision: 20, scale: 8 }).notNull(),
+        close: numeric("close", { precision: 20, scale: 8 }).notNull(),
+        buyVolume: numeric("buy_volume", { precision: 24, scale: 2 }).notNull(),
+        sellVolume: numeric("sell_volume", { precision: 24, scale: 2 }).notNull()
+      },
+      (t) => [
+        index("hyblock_ohlc_coin_time_idx").on(t.coin, t.barTime)
+      ]
+    );
+    hyblockLiqLevels = pgTable(
+      "hyblock_liq_levels",
+      {
+        id: uuid("id").primaryKey().defaultRandom(),
+        captureId: uuid("capture_id").notNull().references(() => hyblockCaptures.id, { onDelete: "cascade" }),
+        exchange: varchar("exchange", { length: 32 }).notNull(),
+        coin: varchar("coin", { length: 16 }).notNull(),
+        barTime: timestamp("bar_time").notNull(),
+        side: tradeSideEnum("side").notNull(),
+        tier: integer("tier").notNull(),
+        price: numeric("price", { precision: 20, scale: 8 }).notNull()
+      },
+      (t) => [
+        index("hyblock_liq_coin_time_side_idx").on(t.coin, t.barTime, t.side)
+      ]
+    );
+    binanceOi = pgTable(
+      "binance_oi",
+      {
+        id: uuid("id").primaryKey().defaultRandom(),
+        symbol: varchar("symbol", { length: 32 }).notNull(),
+        timestamp: timestamp("timestamp").notNull(),
+        openInterest: numeric("open_interest", { precision: 24, scale: 8 }).notNull(),
+        openInterestValue: numeric("open_interest_value", { precision: 24, scale: 2 }).notNull(),
+        interval: varchar("interval", { length: 8 }).notNull()
+      },
+      (t) => [
+        index("binance_oi_symbol_ts_idx").on(t.symbol, t.timestamp)
+      ]
+    );
+    binanceFundingRates = pgTable(
+      "binance_funding_rates",
+      {
+        id: uuid("id").primaryKey().defaultRandom(),
+        symbol: varchar("symbol", { length: 32 }).notNull(),
+        fundingTime: timestamp("funding_time").notNull(),
+        fundingRate: numeric("funding_rate", { precision: 20, scale: 10 }).notNull(),
+        markPrice: numeric("mark_price", { precision: 20, scale: 8 }).notNull()
+      },
+      (t) => [
+        index("binance_funding_symbol_ts_idx").on(t.symbol, t.fundingTime)
+      ]
+    );
+    binanceLongShortRatio = pgTable(
+      "binance_long_short_ratio",
+      {
+        id: uuid("id").primaryKey().defaultRandom(),
+        symbol: varchar("symbol", { length: 32 }).notNull(),
+        timestamp: timestamp("timestamp").notNull(),
+        longShortRatio: numeric("long_short_ratio", { precision: 12, scale: 6 }).notNull(),
+        longAccount: numeric("long_account", { precision: 8, scale: 4 }).notNull(),
+        shortAccount: numeric("short_account", { precision: 8, scale: 4 }).notNull(),
+        interval: varchar("interval", { length: 8 }).notNull()
+      },
+      (t) => [
+        index("binance_ls_symbol_ts_idx").on(t.symbol, t.timestamp)
+      ]
+    );
+    binanceLiquidations = pgTable(
+      "binance_liquidations",
+      {
+        id: uuid("id").primaryKey().defaultRandom(),
+        symbol: varchar("symbol", { length: 32 }).notNull(),
+        eventTime: timestamp("event_time").notNull(),
+        positionSide: tradeSideEnum("position_side").notNull(),
+        price: numeric("price", { precision: 20, scale: 8 }).notNull(),
+        averagePrice: numeric("average_price", { precision: 20, scale: 8 }).notNull(),
+        quantity: numeric("quantity", { precision: 24, scale: 8 }).notNull(),
+        usdValue: numeric("usd_value", { precision: 24, scale: 2 }).notNull(),
+        recordedAt: timestamp("recorded_at").notNull().defaultNow()
+      },
+      (t) => [
+        index("binance_liq_symbol_time_idx").on(t.symbol, t.eventTime),
+        index("binance_liq_symbol_price_idx").on(t.symbol, t.price)
       ]
     );
   }

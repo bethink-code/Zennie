@@ -10,7 +10,7 @@
 // It just retrieves a depth snapshot at a moment in time. Aggregation
 // and rendering live in their own modules.
 
-import type { RawOrderBookDepth } from "../../../analysis/orderbook/types";
+import type { RawOrderBookDepth } from "../../types";
 import { makeRestRequest, type RestDeps } from "./makeRestRequest";
 
 const BINANCE_FUTURES_BASE = "https://fapi.binance.com";

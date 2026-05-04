@@ -38,14 +38,14 @@ export function LevelPanel({ state }: Props) {
     if (ds !== 0) return ds;
     return b.price - a.price;
   });
-  const graduated = state.levels.filter((l) => l.graduatedToPoolId !== null).length;
+  const activePools = state.pools.filter((p) => p.status === "active").length;
 
   return (
     <div className="bg-white border border-black/10 rounded-lg overflow-hidden">
       <header className="px-4 py-2 border-b border-black/10 flex items-center justify-between">
         <h3 className="text-sm font-medium">Panel 1 · Levels</h3>
         <span className="text-xs text-[#888780]">
-          {state.levels.length} total · {graduated} → pools
+          {state.levels.length} total · {activePools} active pools
         </span>
       </header>
       <div className="max-h-96 overflow-auto">

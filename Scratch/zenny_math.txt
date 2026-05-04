@@ -1,0 +1,295 @@
+ ZENNY Mathematical &amp; Calculation Specification Document 5 — Core Formulas, Variables, and Computation Rules 
+April 2026 — Confidential This document defines every calculation in Zenny with mathematical precision. It exists 
+because an ambiguous formula is an instruction to invent. Every variable is named. Every formula is stated. Every 
+threshold is a number, not a description. Every edge case is handled explicitly. The developer implements exactly what 
+is written here — nothing more, nothing less. ⚠ This document supersedes any formula descriptions in Documents 2 
+and 3 where they conflict. If a number appears here, that number is final. 1 Wire Angle Calculation 1.1 The problem 
+with raw price angle A raw price angle — calculated as arctan(price_difference / candle_count) — is unusable across 
+timeframes. A 1H BTC chart at $64,000 and a 4H BTC chart at $64,000 will produce completely different angle numbers for 
+identical market conditions, because the absolute price change per candle is different. A 45° on the 1H does not mean 
+the same thing as a 45° on the 4H. This defeats the purpose of the Gann threshold system entirely. The solution 
+established by research is to normalise price change as a percentage of the prior price before applying the arctangent. 
+This produces a percentage-based slope that is comparable across timeframes and price levels. 1.2 The formula 
+MeasureWireAngle — percentage-normalised angle angle_deg = atan( pct_change / time_units ) × (180 / π) Where: 
+pct_change = (close[0] - close[N-1]) / close[N-1] × 100 (percentage change over lookback) time_units = N — number of 
+candles in lookback window (constant = 14) atan(x) = standard arctangent function, output in radians × (180/π) = 
+converts radians to degrees N = 14 (matches RSI/ROC/ADX standard lookback, research-confirmed) close[0] = closing price 
+of the current candle close[N-1] = closing price of the candle 13 bars ago (14th candle back, 0-indexed) Full 
+step-by-step calculation: // Step 1: Calculate percentage change over 14-candle lookback pct_change = (close[0] - 
+close[13]) / close[13] * 100 // Step 2: Divide by time_units (number of candles = 14) // This gives the slope in % per 
+candle slope = pct_change / 14 // Step 3: Apply arctangent to get angle in degrees angle_deg = Math.atan(slope) * (180 
+/ Math.PI) // Example: BTC rises 2.8% over 14 candles on 1H // pct_change = 2.8 // slope = 2.8 / 14 = 0.2 // angle_deg 
+= atan(0.2) × (180/π) = 11.31° → NO_TRADE bracket // Example: BTC rises 14% over 14 candles on 1H // pct_change = 
+14.0 // slope = 14 / 14 = 1.0 // angle_deg = atan(1.0) × (180/π) = 45.0° → TRENDING bracket // Note: Downtrends 
+produce negative angles. // angle_deg = -32.5° maps to the same bracket as +32.5° for regime // but direction is 
+preserved for trade direction filtering. 1.3 Gann bracket mapping Angle range (°) Bracket Strategy Trade permitted 
+Notes &lt; -26.25 or &gt; 26.25 (Accum zone) — — — See sign rules below -14.00 to +14.00 NO_TRADE None No Wire 
+too flat. Pure noise. 14.01 to 26.25 or -14.01 to -26.25 ACCUMULATION Wait No Building. Not yet directional. 26.26 to 
+45.00 or -26.26 to -45.00 RANGING Zone bounces only Yes Moderate trend. Both arms live. 45.01 to 63.75 or -45.01 to 
+-63.75 TRENDING Full strategy Yes Strong trend. Dominant arm bold. &gt; 63.75 or &lt; -63.75 BREAKOUT Reduced size 
+(0.7×) Yes Near-vertical. Reduce position. ⚠ Boundary rule: a value exactly at a boundary (e.g. exactly 45.00°) 
+maps to the LOWER bracket (RANGING, not TRENDING). Boundary is exclusive on the upper end. 1.4 Sign convention for 
+direction The absolute value of the angle determines the bracket. The sign of the angle determines direction bias: 
+Positive angle = upward wire = bullish bias = Zenny prefers long trades Negative angle = downward wire = bearish bias = 
+Zenny prefers short trades RegimeGuard uses abs(angle_deg) for bracket determination only Trade direction filters use 
+the raw signed angle_deg 1.5 Smoothing before angle calculation The wire is smoothed before the angle is calculated. 
+This prevents a single anomalous candle from corrupting the angle reading. SmoothWire — 3-period simple moving 
+average applied twice smooth[i] = (close[i-1] + close[i] + close[i+1]) / 3 Where: smooth[i] = smoothed value at 
+position i close[i] = raw candle close at position i Pass 1 = apply formula to all interior points, endpoints = raw 
+value Pass 2 = apply formula again to Pass 1 output Result = effectively a weighted average: weights [1,2,3,2,1]/9 over 
+5 candles ⚠ The angle is always calculated on the smoothed wire, never the raw wire. MeasureWireAngle receives 
+smooth_wire as input, not the raw candle closes. 1.6 Wire velocity MeasureWireVelocity — rate of change of angle over 
+last 3 candles velocity = (angle_deg[0] - angle_deg[3]) / 3 Where: angle_deg[0] = current wire angle angle_deg[3] = 
+wire angle 3 candles ago / 3 = normalise to per-candle rate velocity &gt; 0 = ACCELERATING (angle steepening) velocity 
+&lt; 0 = DECELERATING (angle flattening) |velocity| &lt; 0.5°/candle = STABLE 2 Tick Cluster Z-Score — Pool Birth 
+Detection 2.1 What is being measured Pool birth is detected when tick volume at a specific price level is statistically 
+anomalous — significantly higher than the baseline level of activity at that price. This is measured by computing the 
+Z-score of current tick volume against a rolling 200-candle baseline. The measurement is tick volume per price bucket, 
+not raw tick count. A single 500 BTC order counts more than 500 separate 1 BTC orders because it represents a larger 
+liquidity event. 2.2 Price bucket definition Price bucket size bucket_size = round(current_price × 0.001, 0) Where: 
+current_price = last traded price of the instrument × 0.001 = 0.1% of current price round(x, 0) = round to nearest 
+whole number (for BTC this gives ~$64 buckets at $64K) bucket_centre[i] = floor(price / bucket_size) × bucket_size + 
+bucket_size/2 2.3 Tick volume aggregation per bucket // For each incoming tick {timestamp, price, qty, side}: bucket = 
+floor(price / bucket_size) * bucket_size // Accumulate within the current candle period bucket_volume[bucket] += qty 
+bucket_buy_vol[bucket] += (side === &quot;BUY&quot;) ? qty : 0 bucket_sell_vol[bucket] += (side === &quot;SELL&quot;) ? 
+qty : 0 bucket_tick_count[bucket] += 1 // At candle close, snapshot all bucket volumes // Reset accumulators for next 
+candle 2.4 Z-score calculation DetectTickCluster — Z-score of bucket volume vs 200-candle baseline z_score[bucket] = 
+(vol[bucket][0] - mean_200[bucket]) / std_200[bucket] Where: vol[bucket][0] = tick volume in this bucket on the current 
+closed candle mean_200[bucket] = rolling mean of vol[bucket] over last 200 candles std_200[bucket] = rolling standard 
+deviation of vol[bucket] over last 200 candles z_score &gt; 2.0 = cluster detected — statistically significant at 
+95th percentile z_score ≤ 2.0 = normal activity — no cluster 200 candles = the baseline window, research-confirmed 
+standard // Rolling 200-candle baseline per bucket history[bucket] = circular_buffer(capacity=200) // On each candle 
+close: history[bucket].push(vol[bucket][0]) mean_200 = history[bucket].mean() std_200 = history[bucket].std() // Guard 
+against division by zero (first 200 candles or zero-variance bucket) if (std_200 &lt; EPSILON || history[bucket].length 
+&lt; 30): z_score = 0.0 // insufficient history — no cluster possible else: z_score = (vol[bucket][0] - mean_200) / 
+std_200 // EPSILON = 1e-8 (prevents division by zero) // Minimum 30 candles of history required before any cluster can 
+fire ⚠ A cluster fires ONCE per price level per session. Once fired, that bucket is marked as &quot;pool 
+detected&quot; and cannot fire a second birth event until the pool has died and been cleared from the active pool 
+registry. 2.5 Cluster width determination Cluster width — contiguous high-z buckets merged into one level 
+cluster_width = count(contiguous buckets where z_score &gt; 2.0) × bucket_size Where: contiguous = adjacent buckets 
+with no gap between them cluster_centre = weighted mean of bucket_centres weighted by z_score min cluster_width = 1 × 
+bucket_size (single bucket) max cluster_width = 10 × bucket_size = 1% of price (beyond this = multiple pools) 3 Pool 
+Scoring — Complete Formula 3.1 Aggregate score formula AggregatePoolScore S = S_vol + S_depth + S_fresh + S_depart + 
+S_tf + S_tq + S_liq Where: S_vol = volume at price score, 0–20 points S_depth = order book depth score, 0–25 points 
+S_fresh = freshness score, 0–25 points S_depart = departure strength score, 0–15 points S_tf = timeframe confluence 
+score, 0–10 points S_tq = touch quality adjustment, −10 to +5 points S_liq = liquidation cluster score, 0–5 
+points S_max = theoretical maximum = 105 (touch quality bonus of +5 pushes past 100) S_min to trade = 60 (pools scoring 
+below 60 are suppressed entirely) 3.2 Volume score — S_vol ScoreVolume S_vol = lookup(percentile_rank(vol_at_pool, 
+all_levels_vol)) Where: vol_at_pool = total volume traded at pool price ± bucket_size over last 200 candles 
+all_levels_vol = volume at price for ALL levels over same 200-candle window percentile_rank = what percentile is this 
+level in the volume distribution Percentile rank S_vol points Top 10% (≥ 90th percentile) 20 Top 20% (80th–89th 
+percentile) 15 Top 40% (60th–79th percentile) 10 Top 50% (50th–59th percentile) 5 Below median (&lt; 50th 
+percentile) 0 3.3 Order book depth score — S_depth ScoreOrderBookDepth S_depth = lookup(depth_BTC_within_band) Where: 
+depth_BTC_within_band = sum of bid+ask quantities within ±0.5% of pool centre price, in BTC live data source = Binance 
+/api/v3/depth with limit=500 update frequency = on every order book WebSocket message that touches the pool band 
+depth_BTC_within_band S_depth points ≥ 500 BTC 25 250 BTC – 499 BTC 18 100 BTC – 249 BTC 10 50 BTC – 99 BTC 5 
+&lt; 50 BTC 0 ⚠ For non-BTC pairs: convert threshold to USD equivalent. 500 BTC at $64K = $32M. Use equivalent USD 
+thresholds: $32M/$16M/$6.4M/$3.2M for 25/18/10/5 points. 3.4 Freshness score — S_fresh ScoreFreshness — degrades 
+with each touch, research-confirmed S_fresh = max(0, 25 - (touch_count × touch_decay[touch_count])) Where: touch_count 
+= number of times price has entered the pool rectangle since birth touch_decay = non-linear decay schedule — see 
+table below max(0, x) = score cannot go negative Research finding: decay is non-linear. The first touch reduces 
+freshness the most because it reveals that the pool is known to the market. Subsequent touches cause diminishing 
+marginal decay because the pool has already been discovered. touch_count S_fresh Cumulative decay Rationale 0 
+(untouched) 25 0 Fully fresh. Orders undisturbed. 1 20 5 First discovery. Large initial decay. 2 14 11 Pool known to 
+market. Orders absorbed. 3 8 17 Significantly weakened. 4 3 22 Near-exhausted. 5+ 0 25 Pool considered depleted. Score 
+= 0 but pool not dead until death event fires. ⚠ touch_count increments when price enters the pool rectangle AND 
+exits it. A wick that enters but immediately reverses counts as 1 touch when it exits. A candle that enters and closes 
+inside counts as 1 touch. The count updates at candle close, not on tick. 3.5 Departure strength score — S_depart 
+ScoreDepartureStrength — set at pool birth, never changes S_depart = classify(birth_departure_candle) Where: 
+birth_departure_candle = the candle that moved AWAY from the pool when it first formed Gap-away = candle opens 
+completely beyond pool boundary with no overlap — score = 15 ERC = Extended Range Candle: body ≥ 75% of high-low 
+range — score = 9 NRC = Narrow Range Candle: body ≤ 50% of high-low range — score = 4 DOJI = body ≤ 5% of 
+high-low range — score = 1 immutable = score set at birth, does not change for the lifetime of the pool // Gap-away 
+detection: // For resistance pool: gap_away = candle_open &lt; pool_wick_low // For support pool: gap_away = 
+candle_open &gt; pool_wick_high // i.e. the candle that left the zone opened ENTIRELY outside the zone // ERC 
+classification: body_size = abs(close - open) total_range = high - low body_pct = body_size / total_range // ERC: 
+body_pct &gt;= 0.75 // NRC: body_pct &lt;= 0.50 // DOJI: body_pct &lt;= 0.05 // Note: ERC and DOJI are exclusive. NRC 
+catches the middle range. // If body_pct = 0.60: neither ERC nor DOJI → classify as NRC (default) 3.6 Timeframe 
+confluence score — S_tf ScoreTimeframeConfluence S_tf = lookup(count(timeframes where pool_price is within 
+tolerance)) Where: pool_price = centre price of the pool being scored tolerance = 0.5% price distance — pools within 
+0.5% of each other across TFs are considered the same level timeframes checked = 15m (execution), 1H (trading), 4H 
+(higher), Daily (landscape) Timeframes aligned S_tf points 1 timeframe only 3 2 timeframes 7 3 or more timeframes 10 
+Alignment check aligned = abs(pool_A.centre - pool_B.centre) / pool_A.centre ≤ 0.005 Where: pool_A.centre = centre 
+price of pool on trading timeframe pool_B.centre = centre price of candidate pool on other timeframe 0.005 = 0.5% 
+tolerance threshold 3.7 Touch quality adjustment — S_tq ScoreTouchQuality — adjustment applied to each touch, 
+cumulative S_tq = clamp(sum(quality_adjustment[i] for each touch i), -10, +5) Where: quality_adjustment[i] = per-touch 
+adjustment based on rejection quality score rejection_quality = 0–100 score per touch — see formula below clamp(x, 
+-10, +5) = total adjustment capped at +5 (bonus) and floored at -10 (penalty) Per-touch rejection quality score 
+quality[i] = (rejection_speed × 0.5) + (rejection_distance × 0.35) + (candle_type × 0.15) Where: rejection_speed = 
+candles to exit pool / 5: 1 candle = 1.0, 5+ candles = 0.0 (normalised 0–1, scaled 0–100) rejection_distance = 
+distance price moved away from pool in 5 subsequent candles as % of ATR_14, capped at 1.0 candle_type = ERC=1.0, 
+NRC=0.5, DOJI=0.0 weights = 0.5 / 0.35 / 0.15 — rejection speed most important, candle type least quality[i] 
+quality_adjustment[i] Meaning ≥ 70 +1.0 Strong rejection — adds to pool credibility 50 – 69 0.0 Moderate touch 
+— neutral, no adjustment 30 – 49 -1.5 Weak touch — absorbs liquidity, reduces credibility &lt; 30 -3.0 Failed 
+touch — strong signal of pool exhaustion 3.8 Liquidation cluster score — S_liq ScoreLiquidationCluster S_liq = 
+lookup(distance_pct from pool centre to nearest Coinglass cluster) Where: pool.centre = centre price of the pool 
+cluster_price = price of the nearest Coinglass liquidation cluster distance_pct = abs(pool.centre - cluster_price) / 
+pool.centre × 100 distance_pct S_liq points ≤ 0.5% (within half a percent) 5 0.51% – 1.0% 3 1.01% – 2.0% 1 &gt; 
+2.0% 0 3.9 Score decay on pool weakening Pool score with weakening degrade applied S_effective = S × (1 - 
+degrade_factor) Where: S = AggregatePoolScore before weakening adjustment degrade_factor = 0.0 to 1.0, increases as 
+tightening detected degrade_factor formula = tightening_count / 5 (caps at 1.0 after 5 tightening events) 
+tightening_count = number of successive wick interactions where wick_depth[n] &lt; wick_depth[n-1] S_effective = score 
+used for all downstream calculations including pull and arm thickness ⚠ S_effective is what gets used everywhere. The 
+raw S is stored for audit purposes only. Never use raw S in downstream calculations. 4 Pull Score Calculation 4.1 Base 
+pull formula CalculatePullScore — gravitational force of pool on current price pull_raw[pool] = S_effective[pool] / 
+(distance_pct[pool] + DISTANCE_FLOOR) Where: S_effective[pool] = effective pool score after weakening degrade (0–105) 
+distance_pct[pool] = abs(current_price - pool.centre) / current_price × 100 DISTANCE_FLOOR = 0.1 — prevents division 
+by zero when price is inside the pool pull_raw = unnormalised pull — must be normalised before use (see 4.2) ⚠ If 
+current_price is INSIDE the pool rectangle (between pool.wick_low and pool.wick_high), distance_pct = 0. The 
+DISTANCE_FLOOR of 0.1 ensures pull_raw = S_effective / 0.1 = S_effective × 10. This makes a pool that price is already 
+inside the highest-pull pool, which is correct — Zenny is already at the destination. 4.2 Pull normalisation Pull 
+normalised to 0–100 across all active pools pull[pool] = (pull_raw[pool] / max(pull_raw[all_active_pools])) × 100 
+Where: max(pull_raw) = the highest raw pull score among all currently active pools pull[pool] = normalised pull score 
+0–100 dominant pool = pool with pull = 100 (or tied for highest) subordinate pool = pool with second-highest pull 
+score 4.3 Pull decay over time DecayPullWithTime — multiplicative decay per candle price moves away 
+pull_decayed[pool][t] = pull[pool] × (DECAY_RATE ^ candles_moving_away) Where: DECAY_RATE = 0.95 (5% decay per candle, 
+multiplicative) candles_moving_away = number of consecutive candles where distance_pct[pool] increased reset condition 
+= if distance_pct[pool] decreases (price moving toward pool), candles_moving_away resets to 0 minimum pull = pull 
+cannot decay below 5.0 regardless of candles_moving_away example = pool with pull=80, price moving away for 10 candles: 
+80 × 0.95^10 = 80 × 0.599 = 47.9 // Pull decay implementation const DECAY_RATE = 0.95 const MIN_PULL = 5.0 function 
+applyPullDecay(pull, candles_moving_away) { const decayed = pull * Math.pow(DECAY_RATE, candles_moving_away) return 
+Math.max(MIN_PULL, decayed) } // Track movement direction per pool on each candle close if (distance_pct[pool] &gt; 
+distance_pct_prev[pool]) { candles_moving_away[pool] += 1 // price moved away from pool } else { 
+candles_moving_away[pool] = 0 // price moved toward or stayed — reset } 4.4 Arm suppression threshold CheckArmExists 
+— minimum pull threshold for arm to be rendered arm_exists = pull_decayed[pool] ≥ ARM_MINIMUM_PULL Where: 
+ARM_MINIMUM_PULL = 15.0 (constant) — arms with pull below this are suppressed entirely arm_exists = false = arm 
+removed from render queue. No visual arm. No planned trade in that direction. arm_exists = true = arm rendered with 
+thickness proportional to pull_decayed arm_thickness_px = 1 + (pull_decayed / 100) × 5 — ranges from 1px (pull=15) 
+to 6px (pull=100) 5 Tendency Wire Calculations 5.1 Approach velocity MeasureApproachVelocity — % per candle toward 
+pool velocity = (distance_pct[pool][t-N] - distance_pct[pool][t]) / N Where: distance_pct[pool][t] = current distance 
+as percentage of price distance_pct[pool][t-N] = distance N candles ago (N = 5, constant) / N = normalise to per-candle 
+rate velocity &gt; 0 = price MOVING TOWARD pool (distance decreasing) velocity &lt; 0 = price MOVING AWAY from pool 
+velocity = 0 = price stationary relative to pool velocity (% per candle) approach_type Effect on tendency ≥ 0.30 
+STEEP Aggressive sweep expected. Deep wick. Fast rejection. 0.10 – 0.29 MODERATE Standard interaction. Medium sweep 
+depth. 0.01 – 0.09 FLAT Tentative approach. Shallow test. ≤ 0.00 (moving away) AWAY Pool losing relevance. Pull 
+decays. 5.2 Estimated sweep depth EstimateSweepDepth — how far price expected to penetrate the pool sweep_depth_pct = 
+base_depth × volume_modifier Where: base_depth = derived from approach_type: STEEP=0.80, MODERATE=0.50, FLAT=0.25, 
+AWAY=0.10 volume_modifier = S_vol / 20 (normalises volume score to 0–1 range) sweep_depth_pct = percentage of pool 
+zone width (wick_high - wick_low) that price is expected to penetrate max cap = 1.0 (100% — price cannot sweep beyond 
+the pool wick extreme by definition) min floor = 0.10 (10% — even the shallowest touch enters at least 10% of zone) 
+example = STEEP approach, S_vol=16: sweep_depth_pct = 0.80 × (16/20) = 0.80 × 0.80 = 0.64 = 64% of zone width // 
+Sweep depth in price terms zone_width = pool.wick_high - pool.wick_low // absolute price sweep_distance_abs = 
+zone_width * sweep_depth_pct // For a RESISTANCE pool (price approaching from below): // sweep enters from wick_low 
+(bottom of zone) sweep_entry_price = pool.wick_low sweep_extreme_price = pool.wick_low + sweep_distance_abs // Note: 
+sweep_extreme_price must be &lt;= pool.wick_high // For a SUPPORT pool (price approaching from above): // sweep enters 
+from wick_high (top of zone) sweep_entry_price = pool.wick_high sweep_extreme_price = pool.wick_high - 
+sweep_distance_abs // Note: sweep_extreme_price must be &gt;= pool.wick_low 5.3 Ghost candle coordinates 
+EstimateGhostCandleShape — REVERSAL tendency ghost.open = sweep_entry_price
+ghost.high = sweep_extreme_price (resistance pool)
+ghost.low = sweep_extreme_price (support pool)
+ghost.close = sweep_entry_price + (sweep_entry_price - sweep_extreme_price) × REJECTION_RATIO Where: sweep_entry_price 
+= pool boundary price where price first enters zone sweep_extreme_price = deepest price reached inside zone (from 
+sweep_depth calculation) REJECTION_RATIO = 0.618 (golden ratio — price closes back 61.8% of the sweep distance, 
+research-confirmed Fibonacci level) ghost.close for resistance = sweep_entry_price - (sweep_extreme_price - 
+sweep_entry_price) × 0.618 ghost.close for support = sweep_entry_price + (sweep_entry_price - sweep_extreme_price) × 
+0.618 constraint = ghost.close must be inside pool boundaries (between wick_low and wick_high) EstimateGhostCandleShape 
+— CONTINUATION tendency ghost.open = sweep_entry_price
+ghost.high = pool.wick_high + (pool.wick_high - pool.wick_low) × 0.3 (resistance)
+ghost.low = pool.wick_low - (pool.wick_high - pool.wick_low) × 0.3 (support)
+ghost.close = ghost.high (resistance) or ghost.low (support) Where: CONTINUATION = price blows through the pool — 
+ghost shows body extending beyond zone × 0.3 = ghost extends 30% of zone width beyond the zone boundary ghost colour = 
+red body for resistance continuation (bearish), green for support continuation ⚠ The ghost candle is the ONLY 
+projected element on the right panel. All other price elements on the right panel are drawn from real data (last real 
+candle, pool boundaries). The ghost candle has a dashed border and 40% opacity to distinguish it from real candles. 5.4 
+Tendency classification logic ClassifyTendency — ordered decision tree if (S_vol &gt;= 15 AND S_effective &gt;= 75 
+AND abs(angle_deg) &gt; 45 AND approach_type == STEEP): Where: → BREAKOUT = price likely to break through pool and 
+continue elif (S_vol &lt; 8 OR S_effective &lt; 45): Where: → CONTINUATION = pool too thin or too weak to reverse 
+price — continuation expected elif (S_effective &gt;= 75 AND approach_type == STEEP): Where: → REVERSAL = rich pool 
+approached aggressively — sweep and reverse expected else: Where: → REVERSAL = default — most pools behave as 
+magnets and reverse price ⚠ The BREAKOUT check comes FIRST. A pool can be rich and approached steeply but still 
+produce a BREAKOUT if the wire angle is above 45°. Wire angle context always overrides pool-only classification. 6 
+Position Sizing Formula 6.1 Complete formula CalculatePositionSize — full formula size_usd = account_balance × 
+base_risk_pct × score_modifier × type_modifier × regime_modifier Where: account_balance = total account value in USD 
+base_risk_pct = configured risk per trade as a decimal (default = 0.01 = 1% of account) score_modifier = S_effective / 
+100 — higher-scoring pools get larger positions type_modifier = 1.0 for TYPE1 trade, 0.5 for TYPE2 pullback trade 
+regime_modifier = 1.0 for TRENDING, 0.85 for RANGING, 0.70 for BREAKOUT, 0 for NO_TRADE/ACCUMULATION size_usd = raw USD 
+risk per trade before cap/floor enforcement Converting USD risk to contract size contracts = size_usd / (entry_price × 
+stop_distance_pct) Where: size_usd = risk amount in USD from formula above entry_price = planned entry price from 
+ValidateEntryLocation stop_distance_pct = abs(entry_price - stop_price) / entry_price contracts = number of base asset 
+units to trade 6.2 Cap and floor Limit Value Applied when Maximum position size 5% of account balance in USD equivalent 
+After all modifiers applied Minimum position size 0.1% of account balance in USD equivalent After all modifiers applied 
+Maximum cap enforcement size_usd = min(size_usd, account_balance × 0.05) Always Minimum floor enforcement size_usd = 
+max(size_usd, account_balance × 0.001) Only when trade is permitted ⚠ These caps are hard limits enforced in code, 
+not guidelines. No position may exceed 5% of account balance. A pool scoring 105 with TYPE1 trade in TRENDING regime 
+still cannot exceed the 5% cap. 6.3 Example calculation // Example: BTC long trade account_balance = 100,000 // USD 
+base_risk_pct = 0.01 // 1% risk per trade S_effective = 88 // high scoring pool type = TYPE1 // aligned with higher TF 
+regime = TRENDING // wire angle 50° // Calculate score_modifier = 88 / 100 = 0.88 type_modifier = 1.0 regime_modifier 
+= 1.0 size_usd = 100000 × 0.01 × 0.88 × 1.0 × 1.0 size_usd = 880 USD at risk // Convert to contracts entry_price = 
+64500 stop_price = 63900 // below pool wick_low - 0.5 ATR stop_distance_pct = (64500 - 63900) / 64500 = 0.0093 = 0.93% 
+contracts = 880 / (64500 × 0.0093) contracts = 880 / 599.85 contracts = 1.467 BTC // Cap check: 1.467 × 64500 = 
+$94,591 position value // 5% cap = $5,000. Position value != risk. Risk is already capped by formula. // Cap applies to 
+size_usd: 880 &lt; 5000 → no cap applied 7 Stop Loss and Target Price Formulas 7.1 Stop loss placement SetStopLoss 
+— ATR-buffered, always outside pool rectangle stop_price = pool.wick_low - (ATR_14 × 0.5) [for long trades]
+stop_price = pool.wick_high + (ATR_14 × 0.5) [for short trades] Where: pool.wick_low = bottom boundary of pool 
+rectangle in price pool.wick_high = top boundary of pool rectangle in price ATR_14 = 14-period Average True Range using 
+Wilder&apos;s smoothing: ATR[i] = (ATR[i-1] × 13 + TR[i]) / 14 TR = True Range = max(high-low, abs(high-prev_close), 
+abs(low-prev_close)) × 0.5 = half ATR buffer — enough to avoid normal wick noise without excessive risk constraint = 
+stop_price must always be outside the pool rectangle // ATR calculation — Wilder smoothing (standard) // Initialise 
+with SMA of first 14 true ranges ATR_14[14] = mean(TR[1..14]) // Subsequent bars: ATR_14[i] = (ATR_14[i-1] × 13 + 
+TR[i]) / 14 // Stop validation if (trade_direction == LONG): assert stop_price &lt; pool.wick_low // must be below pool 
+if (trade_direction == SHORT): assert stop_price &gt; pool.wick_high // must be above pool // If ATR is so small that 
+stop falls inside pool: // Use minimum buffer of 0.2% of entry price MIN_BUFFER_PCT = 0.002 if (trade_direction == LONG 
+AND stop_price &gt;= pool.wick_low): stop_price = pool.wick_low × (1 - MIN_BUFFER_PCT) 7.2 Target price SetTarget — 
+next qualifying pool in trade direction target_price = next_pool.centre_line Where: next_pool = the active pool with 
+the highest pull score in the trade direction and pull ≥ ARM_MINIMUM_PULL target_price = the centre line of that 
+pool, not the wick boundary rationale = Zenny targets the centre of the pool (maximum liquidity) not the edge (where 
+rejection begins) null case = if no qualifying pool exists in trade direction, target = null, trade still permitted but 
+logged as &quot;no target&quot; 7.3 Risk-reward ratio calculation R:R Ratio rr_ratio = (target_price - entry_price) / 
+(entry_price - stop_price) [long]
+rr_ratio = (entry_price - target_price) / (stop_price - entry_price) [short] Where: minimum acceptable R:R = 1.5 — 
+trades with R:R below 1.5 are logged as SKIP with reason LOW_RR displayed in UI = on the PlannedTradeMarker tooltip and 
+in the DailyReportTradeList null target = if target = null, R:R = null. Trade proceeds but displayed as &quot;R:R: 
+N/A&quot; ⚠ Minimum R:R of 1.5 is enforced at the trade validation stage, not at entry. If R:R &lt; 1.5, the setup is 
+logged as SKIPPED with reason LOW_RR. It is NOT logged as MISSED — it was detected but intentionally filtered. 
+Integrity score is not penalised. 8 Pool Death and Tightening — Precise Definitions 8.1 Wick depth measurement for 
+tightening Wick depth into pool — for tightening detection wick_depth[i] = (wick_extreme[i] - pool.centre) / 
+(pool.boundary - pool.centre) Where: wick_extreme[i] = for resistance: candle high that entered the pool. For support: 
+candle low. pool.centre = pool.centre_line price pool.boundary = for resistance: pool.wick_high. For support: 
+pool.wick_low. result 0.0 = wick only reached the pool boundary — zero penetration result 1.0 = wick reached exactly 
+the pool centre line result &gt; 1.0 = wick crossed the centre line (very deep touch) // Tightening detection — 
+requires 3 consecutive touches function detectTightening(recent_touches) { if (recent_touches.length &lt; 3) return 
+false const last3 = recent_touches.slice(-3) const depths = last3.map(t =&gt; t.wick_depth) // Each must be shallower 
+than the previous const isTightening = ( depths[1] &lt; depths[0] AND depths[2] &lt; depths[1] ) // Calculate 
+degrade_factor from tightening trend if (isTightening) { const depth_reduction = (depths[0] - depths[2]) / depths[0] 
+degrade_factor = min(1.0, degrade_factor + depth_reduction × 0.4) } return isTightening } 8.2 Pool death conditions 
+Pool death is declared when ANY ONE of these three conditions is met. Each condition fires a death event independently. 
+Condition 1 — Engulfing candle DetectEngulfingCandle engulfed = (candle.open &lt; pool.wick_low AND candle.close &gt; 
+pool.wick_high) [resistance]
+ OR (candle.open &gt; pool.wick_high AND candle.close &lt; pool.wick_low) [support] Where: condition = candle BODY 
+(open and close) must cross BOTH pool boundaries wicks alone are insufficient = only body counts for engulfing 
+detection fires immediately = death event fires on the close of the engulfing candle, not the next candle Condition 2 
+— Sustained close outside boundary DetectSustainedBreak — 3 consecutive closes beyond pool boundary sustained_break 
+= count(candles where close &gt; pool.wick_high) &gt;= 3 [resistance broken up]
+ OR count(candles where close &lt; pool.wick_low) &gt;= 3 [support broken down] Where: 3 consecutive = the closes must 
+be consecutive — one close back inside resets the count to 0 fires on 3rd close = death event fires on the close of 
+the 3rd candle, not after direction matters = resistance broken UP means close &gt; wick_high. Support broken DOWN 
+means close &lt; wick_low. Condition 3 — Score exhaustion DetectScoreExhaustion — pool depleted by repeated touches 
+exhausted = (S_effective &lt; EXHAUSTION_THRESHOLD) Where: EXHAUSTION_THRESHOLD = 15 — a pool scoring below 15 after 
+all decay is applied is considered exhausted does not fire immediately = score must remain below 15 for 3 consecutive 
+candle closes distinction from suppression = suppression fires when S drops below 60 on first calculation. Exhaustion 
+fires only after decay brings a previously active pool below 15. 8.3 Polarity flip on death ApplyPolarityFlip — 
+called immediately after death event fires flipped_pool.type = (original_pool.type == RESISTANCE) ? SUPPORT : RESISTANCE
+flipped_pool.score = max(40, original_pool.S_at_birth × 0.4)
+flipped_pool.touch_count = 0
+flipped_pool.boundaries = original_pool.boundaries // unchanged Where: flipped type = resistance becomes support, 
+support becomes resistance reset score = 40, or 40% of original birth score — whichever is higher. Gives credit for 
+strong original pool. touch_count reset = 0 — the flipped pool is fresh in its new role boundaries preserved = 
+wick_high, wick_low, and centre_line do not change on flip cannot flip again = a flipped pool that dies does NOT flip 
+again. It is simply marked inactive. 9 Integrity Score Formula CalculateIntegrityScore integrity_pct = (taken + 
+skipped) / (taken + skipped + missed) × 100 Where: taken = count of valid setups where a trade was executed skipped = 
+count of valid setups where Zenny detected the setup but intentionally filtered it (LOW_RR, SESSION_FILTER, 
+FUNDING_RATE, etc.) missed = count of valid setups that Zenny did not detect at all — identified retrospectively by 
+the auto-research framework valid setup = a pool with S_effective &gt;= 60, RegimeGuard passed, price at pool boundary, 
+within valid session denominator = total valid setups = taken + skipped + missed integrity_pct &gt;= 80 = system 
+working correctly integrity_pct &lt; 80 = a function is broken — requires immediate investigation ⚠ SKIPPED setups 
+DO NOT penalise integrity. A skipped setup is one Zenny saw and correctly chose not to trade. MISSED setups DO penalise 
+integrity. A missed setup is one Zenny was blind to. The distinction is critical — confusing them would make the 
+integrity score meaningless. 9.1 What constitutes a valid setup for integrity purposes All five conditions must be 
+simultaneously true at the same candle close for a setup to count as valid: S_effective &gt;= 60 (pool passes minimum 
+threshold) abs(angle_deg) &gt;= 26.25 (RegimeGuard would permit a trade) price is within 0.2% of pool.wick_low (for 
+resistance) or pool.wick_high (for support) — i.e. price is at the pool boundary session_active = true (within 
+configured valid trading session) pull_decayed[pool] &gt;= ARM_MINIMUM_PULL (arm is not suppressed) ⚠ Condition 3 — 
+&quot;price within 0.2% of pool boundary&quot; — is the key constraint. A pool may exist with high score and valid 
+regime, but if price is not at the pool boundary, there is no trade setup and it does not count toward integrity. 
+Integrity measures whether Zenny correctly identified and acted on entry opportunities, not whether it tracked all 
+active pools. End of Zenny Mathematical &amp; Calculation Specification — Document 5 — v1.0 — April 2026 

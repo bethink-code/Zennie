@@ -1,122 +1,96 @@
-// Orchestrator — Phase 2 refactor: multi-timeframe detection with confluence.
+// Orchestrator - analysis assembly only.
 //
-// Fetches all timeframes in parallel, runs per-TF swing detection with
-// follow-through filtering, selects N most recent per side per TF, then
-// clusters across TFs to compute confluence. Every level is tagged with
-// its source TF and its confluence count; the "trader's four" (4H / D / W / M)
-// are the TFs that contribute to confluence scoring.
+//   Levels = structural support/resistance references.
+//            Pivots and body clusters create levels from closed candles.
+//            Wicks can interact with a level, but close-through evidence
+//            drives break/flip semantics.
 //
-// Lines are drawn at the CLOSE of the swing candle. Pools are one-sided
-// rectangles on the stops side of the line (ATR × 1.0 by default).
+//   Pools  = standalone wick-liquidity remainders.
+//            They are discovered by findLiquidityPools and depleted by later
+//            traded price, including lower-timeframe candles.
+//
+// Levels and pools are deliberately separate systems. Pivots are useful for
+// structural levels; they are not a prerequisite for liquidity pools.
+//
+// Pure functions only. No DB writes, no side effects. Fetch candles, run
+// detection, return the AnalysisState the route serializes.
 
 import type { Candle, Timeframe } from "../../../../shared/zennyTypes";
-import {
-  DEFAULT_TIMEFRAME_STACK,
-  CONFLUENCE_TIMEFRAMES,
-} from "../../../../shared/zennyTypes";
+import { DEFAULT_TIMEFRAME_STACK } from "../../../../shared/zennyTypes";
 import type { MarketDataProvider } from "../infrastructure/providers/providerInterface";
 import { getCandles } from "./data/getCandles";
-import { getOrderBookDepth } from "./data/getOrderBookDepth";
-import { aggregateDepthIntoBuckets } from "./orderbook/aggregateDepthIntoBuckets";
-import type { DepthSnapshot } from "./orderbook/types";
 import {
-  findLocalExtrema,
-  type SwingExtremum,
-} from "./candle/findLocalExtrema";
-import { computeAtr14 } from "./candle/measureFollowThrough";
-import { selectMostRecent } from "./level/selectMostRecent";
-import { dedupeSwingPivots } from "./level/dedupeSwingPivots";
+  findBodyPivots,
+  type BodyPivot,
+} from "./level/findBodyPivots";
+import { isLevelBroken } from "./level/isLevelBroken";
 import { findBodyClusters } from "./level/findBodyClusters";
-import { filterBrokenPivots } from "./level/filterBrokenPivots";
-import { findStructuralLevels } from "./level/findStructuralLevels";
-import { findRdpLevels } from "./level/findRdpLevels";
-import { findZigZagLevels } from "./level/findZigZagLevels";
 import {
-  detectConfluence,
-  type LevelInput,
-} from "./level/detectConfluence";
-import {
-  combinedLevelStrength,
+  levelStrength,
   type LevelStrength,
-} from "./level/strength";
-import { setPoolBoundaries } from "./pool/setPoolBoundaries";
-import { detectEngulfingDeath } from "./pool/detectEngulfingDeath";
-import { detectSustainedBreakDeath } from "./pool/detectSustainedBreakDeath";
+} from "./level/levelStrength";
+import {
+  type PoolStatus,
+  type DeathReason,
+  type SweepReason,
+} from "./pool/checkPoolAliveness";
+import {
+  runPullPass,
+  DEFAULT_PULL_PASS_CONFIG,
+  type PoolPull,
+} from "./pool/pullPass";
+import { extractArms, type ExtractedArms } from "./arms/extractArms";
+import {
+  findLiquidityPools,
+  type LiquidityPoolKind,
+} from "./liquidity/findLiquidityPools";
+import { runPasses, type PassInfo } from "./passes/runPasses";
+import {
+  DEFAULT_PASS_CONFIG,
+  getDefaultPassConfigForTimeframe,
+  type PassConfig,
+} from "./passes/types";
+import type { LastLegSwing } from "./passes/lastLegPass";
 
 // ---------------------------------------------------------------------------
-// Per-TF follow-through ATR multipliers (research-backed defaults)
-// Lower TFs get stricter filtering because noise is more common.
+// Output types — kept compatible with the Braid's AnalysisStateClient.
+// Fields the brief no longer computes (matchingTimeframes, confluenceCount,
+// clusterMemberIds, kind) are present but populated with safe defaults so
+// the renderer keeps working.
 
-const FOLLOW_THROUGH_BY_TF: Partial<Record<Timeframe, number>> = {
-  "15m": 1.8,
-  "1H": 1.8,
-  "4H": 2.5,
-  "12H": 2.5,
-  D: 2.5,
-  W: 3.0,
-  M: 3.0,
-};
-
-function followThroughFor(tf: Timeframe): number {
-  return FOLLOW_THROUGH_BY_TF[tf] ?? 2.5;
-}
-
-// Per-TF reversal thresholds for findZigZagLevels, expressed as a fraction
-// of the running extreme. A swing high (or low) is confirmed when price
-// reverses from the running max (or min) by more than this much.
-//
-// ZigZag was chosen over RDP on 2026-04-15 after verification against real
-// BTCUSDT Monthly data showed RDP picks intermediate wobbles (March 2021
-// first peak) instead of cycle extremes (October 2021 actual ATH). ZigZag's
-// "running extreme" naturally captures the absolute peak of each direction.
-//
-// Verified against user's hand-annotated Monthly vertices: 40% threshold
-// gets 4/5 match (#25, #39, #70, #77 all correct; misses #12 which is not
-// a swing low by any algorithm). Other TFs are first-pass guesses.
-const ZIGZAG_PCT_BY_TF: Partial<Record<Timeframe, number>> = {
-  M: 0.4, // 40% — cycle-scale reversals only (verified against Monthly)
-  W: 0.25, // 25%
-  D: 0.12, // 12%
-  "12H": 0.05,
-  "4H": 0.03, // 3%
-  "1H": 0.02, // 2%
-  "15m": 0.01, // 1%
-};
-
-// ---------------------------------------------------------------------------
-// Output types
-
-export type { LevelStrength } from "./level/strength";
-export type PoolStatus = "active" | "dead";
-export type DeathReason = "engulfing" | "sustained_break" | "score_exhaustion";
-export type PoolKind = "historical_respect" | "untaken_liquidity";
+export type { LevelStrength } from "./level/levelStrength";
+export type {
+  PoolStatus,
+  DeathReason,
+  SweepReason,
+} from "./pool/checkPoolAliveness";
+export type PoolKind = LiquidityPoolKind;
 
 export interface AnalysisLevel {
   id: string;
-  price: number; // close of the swing candle
-  wickPrice: number; // wick extreme for diagnostics
+  price: number; // body extreme of swing candle (or cluster median)
+  wickPrice: number; // wick extreme of swing candle (= price for clusters)
   side: "RESISTANCE" | "SUPPORT";
   sourceTimeframe: Timeframe;
-  swingCandleTime: number; // ms epoch
-  // The index below is into the PRIMARY timeframe's candle array, not the
-  // source TF. It's computed by the orchestrator's cross-TF mapping so the
-  // renderer can draw this level on the primary chart without extra work.
+  swingCandleTime: number;
   swingCandleIndexOnPrimary: number;
-  // Confluence enrichment
-  matchingTimeframes: Timeframe[]; // which other TFs have a matching level
-  confluenceCount: number; // how many of CONFLUENCE_TIMEFRAMES agree (self included)
-  clusterMemberIds: string[];
-  // Recency within the primary TF (0 = oldest candle, 1 = newest)
-  recency: number;
-  // Derived strength
+  // Identification method that produced this level. "swing" = N-bar body
+  // pivot from findBodyPivots. "cluster" = horizontal price cluster from
+  // findBodyClusters. Different shapes of the same idea — both go through
+  // the same pass chain and render alongside each other.
+  source: "swing" | "cluster";
+  matchingTimeframes: Timeframe[]; // [] in this cut
+  confluenceCount: number; // 0 in this cut
+  clusterMemberIds: string[]; // [] in this cut
+  recency: number; // 0..1 along primary TF window
   strength: LevelStrength;
-  graduatedToPoolId: string | null;
-  // Invalidation flag: true if any subsequent candle on the SOURCE TF closed
-  // past this level's price (body close past — wick tests don't count). Once
-  // broken, the level represents consumed liquidity and should not render as
-  // tradeable. Computed during level construction by walking forward through
-  // the source TF's candles from the level's swing index.
+  graduatedToPoolId: string | null; // legacy API field; pools are standalone
   broken: boolean;
+  // Multi-pass results bag. Open-ended — each pass writes under its own
+  // key. Absent key = pass was disabled or didn't apply. The renderer
+  // keys on presence, never on shape; passes are independently
+  // toggleable without breaking the contract.
+  passes: Record<string, unknown>;
 }
 
 export interface AnalysisPool {
@@ -125,47 +99,61 @@ export interface AnalysisPool {
   sourceTimeframe: Timeframe;
   type: "RESISTANCE" | "SUPPORT";
   kind: PoolKind;
-  linePrice: number; // the level the pool sits on
+  linePrice: number;
   wickHigh: number;
   wickLow: number;
   centreLine: number;
   birthCandleTime: number;
   birthCandleIndexOnPrimary: number;
+  sweptCandleTime: number | null;
+  sweptCandleIndexOnPrimary: number | null;
+  sweepReason: SweepReason | null;
   deathCandleTime: number | null;
   deathCandleIndexOnPrimary: number | null;
   deathReason: DeathReason | null;
   status: PoolStatus;
   confluenceCount: number;
   strength: LevelStrength;
+  // Spec §4 pull score — gravitational ranking of this pool against
+  // current price. Null for non-active pools and when the primary TF
+  // has no candles. Populated once after all pools are formed.
+  pull: PoolPull | null;
 }
 
 export interface AnalysisState {
   symbol: string;
   primaryTimeframe: Timeframe;
-  analysedTimeframes: Timeframe[]; // all TFs successfully fetched
-  candles: Candle[]; // primary TF only (what the canvas renders)
-  levels: AnalysisLevel[]; // all levels from all TFs, enriched with confluence
+  analysedTimeframes: Timeframe[];
+  candles: Candle[]; // primary TF only
+  levels: AnalysisLevel[];
   pools: AnalysisPool[];
-  // Order book depth snapshot, binned across the primary TF's price
-  // range. SECOND self-standing model — independent of levels/pools,
-  // rendered side-by-side for visual cross-check only. Null when the
-  // depth fetch failed (analysis still proceeds with levels intact).
-  depth: DepthSnapshot | null;
+  // Global pass output — non-per-level data the renderer consumes
+  // directly. Populated by passes whose contribution is structural
+  // (e.g. lastLeg's swing prices, which mark frame bounds independent
+  // of any specific level).
+  passInfo: PassInfo;
+  // Two-arm braid output (spec §2.10). Top-pull active pool above and
+  // below current price, gated by ARM_MINIMUM_PULL=15.0. Drives the
+  // right-frame canvas. Both null when no qualifying pools exist.
+  arms: ExtractedArms;
+  depth: null; // out of brief; stays null until the user asks for it back
+  orderFlow: null;
   computedAtMs: number;
 }
 
+// Re-export for client type sync.
+export type { LastLegSwing };
+
 // ---------------------------------------------------------------------------
-// Public API
 
 export interface RunAnalysisInput {
   provider: MarketDataProvider;
   symbol: string;
   primaryTimeframe: Timeframe;
-  candleCountPerTf?: number; // default 200
-  timeframeStack?: Timeframe[]; // default DEFAULT_TIMEFRAME_STACK
-  swingN?: number; // default 7
-  perSide?: number; // default 2 — N most recent per side per TF
-  poolOffsetAtrMultiplier?: number; // default 1.0
+  candleCountPerTf?: number;
+  timeframeStack?: Timeframe[];
+  pivotN?: number; // bars on each side of swing (default 2 → 5-bar swing)
+  passConfig?: PassConfig; // overrides DEFAULT_PASS_CONFIG
 }
 
 export async function runAnalysis(
@@ -173,15 +161,11 @@ export async function runAnalysis(
 ): Promise<AnalysisState> {
   const candleCount = input.candleCountPerTf ?? 200;
   const stack = input.timeframeStack ?? DEFAULT_TIMEFRAME_STACK;
-  const swingN = input.swingN ?? 7;
-  const perSide = input.perSide ?? 2;
-  const poolOffsetMult = input.poolOffsetAtrMultiplier ?? 1.0;
+  const pivotN = input.pivotN ?? 2;
 
-  // 1. Fetch all timeframes in parallel + depth snapshot in parallel.
-  //    Each TF may return different amounts of data (Monthly for BTCUSDT
-  //    is limited to ~96 candles of history). Depth is independent and
-  //    failure is non-fatal — analysis still produces levels + pools.
-  const candleFetchPromise = Promise.all(
+  // 1. Fetch all timeframes in parallel. A failed fetch for one TF doesn't
+  //    fail the whole analysis — that TF is just absent from the result.
+  const fetchResults = await Promise.all(
     stack.map(async (tf) => {
       try {
         const candles = await getCandles(input.provider, {
@@ -189,63 +173,23 @@ export async function runAnalysis(
           timeframe: tf,
           count: candleCount,
         });
-        return { tf, candles, error: null as Error | null };
-      } catch (err) {
-        return {
-          tf,
-          candles: [] as Candle[],
-          error: err instanceof Error ? err : new Error(String(err)),
-        };
+        return { tf, candles };
+      } catch {
+        return { tf, candles: [] as Candle[] };
       }
     }),
   );
-  const depthFetchPromise = getOrderBookDepth(input.provider, {
-    symbol: input.symbol,
-    limit: 1000,
-  }).catch(() => null);
 
-  const [fetchResults, rawDepth] = await Promise.all([
-    candleFetchPromise,
-    depthFetchPromise,
-  ]);
-
-  // 2. Per-TF: detect swings, filter by follow-through, select most recent.
-  const perTfPivots = new Map<Timeframe, SwingExtremum[]>();
   const perTfCandles = new Map<Timeframe, Candle[]>();
   const analysedTfs: Timeframe[] = [];
-
   for (const { tf, candles } of fetchResults) {
-    if (candles.length < swingN * 2 + 1) continue; // not enough data
-    analysedTfs.push(tf);
+    if (candles.length < pivotN * 2 + 1) continue;
     perTfCandles.set(tf, candles);
-
-    // findZigZagLevels — THE authoritative level detector. Walks the
-    // candle closes in alternating directions, tracking the running
-    // extreme of each direction, and confirms vertices when price
-    // reverses by more than the per-TF threshold. The running extreme
-    // IS the cycle extreme (highest close in a bull leg, lowest in a
-    // bear leg), so double-top cycles correctly pick the higher peak.
-    //
-    // Replaces findRdpLevels which was structurally wrong: RDP's
-    // "farthest from chord" recursion picks intermediate wobbles instead
-    // of cycle extremes. See findZigZagLevels.ts header for the full
-    // rationale.
-    const levels = findZigZagLevels({
-      candles,
-      reversalPct: ZIGZAG_PCT_BY_TF[tf] ?? 0.05,
-    });
-    perTfPivots.set(tf, levels);
-
-    // Legacy pipeline retained in the codebase (findLocalExtrema,
-    // dedupeSwingPivots, findBodyClusters, filterBrokenPivots,
-    // findStructuralLevels) but no longer called from the orchestrator.
-    // They remain as building blocks in case future evolution wants them.
+    analysedTfs.push(tf);
   }
 
   const primaryCandles =
-    perTfCandles.get(input.primaryTimeframe) ??
-    fetchResults.find((r) => r.tf === input.primaryTimeframe)?.candles ??
-    [];
+    perTfCandles.get(input.primaryTimeframe) ?? [];
 
   if (primaryCandles.length === 0) {
     return {
@@ -255,321 +199,294 @@ export async function runAnalysis(
       candles: [],
       levels: [],
       pools: [],
+      passInfo: {},
+      arms: { upper: null, lower: null, dominantSide: "neither" },
       depth: null,
+      orderFlow: null,
       computedAtMs: Date.now(),
     };
   }
 
-  // 3. Build flat level list across TFs. Each level's index is mapped onto
-  //    the primary TF's candle array so the renderer has a clean X coordinate.
-  //    Also compute the `broken` flag by walking forward through the source
-  //    TF's candles from the pivot — any close past the pivot's price
-  //    (body close, not wick) invalidates the level.
-  const flatLevels: AnalysisLevel[] = [];
+  // 2. Per-TF detection: pivots → broken flag → strength → pool boundaries
+  //    → aliveness. Each pivot becomes one level + one pool, mapped onto
+  //    the primary TF's index space for rendering.
+  const levels: AnalysisLevel[] = [];
+  const pools: AnalysisPool[] = [];
+
   for (const tf of analysedTfs) {
-    const pivots = perTfPivots.get(tf) ?? [];
-    const sourceCandles = perTfCandles.get(tf) ?? [];
+    const candles = perTfCandles.get(tf)!;
+    const pivots = findBodyPivots({ candles, n: pivotN });
+
     for (const pivot of pivots) {
-      const side: "RESISTANCE" | "SUPPORT" =
-        pivot.type === "swing_high" ? "RESISTANCE" : "SUPPORT";
-      const swingCandleTime = pivot.candleOpenTime;
-      const primaryIdx = findClosestCandleIndex(primaryCandles, swingCandleTime);
+      const breakResult = isLevelBroken(candles, pivot);
+      const rawIndex = findClosestCandleIndex(
+        primaryCandles,
+        pivot.candleOpenTime,
+      );
+      // Clamp the index into the visible primary window. A pivot from a
+      // lower TF can sit between two primary candles or beyond the last
+      // one — render it at the nearest edge so the X coordinate is valid.
+      const swingCandleIndexOnPrimary =
+        rawIndex < 0
+          ? -1
+          : Math.min(rawIndex, primaryCandles.length - 1);
       const recency =
-        primaryIdx < 0 ? 0 : primaryIdx / Math.max(1, primaryCandles.length - 1);
+        swingCandleIndexOnPrimary < 0
+          ? 0
+          : Math.min(
+              1,
+              swingCandleIndexOnPrimary /
+                Math.max(1, primaryCandles.length - 1),
+            );
 
-      // Compute broken: for a swing high, broken if any subsequent close
-      // on the source TF went above pivot.price. Mirror for swing low.
-      let broken = false;
-      for (let j = pivot.index + 1; j < sourceCandles.length; j++) {
-        const close = sourceCandles[j].close;
-        if (side === "RESISTANCE" && close > pivot.price) {
-          broken = true;
-          break;
-        }
-        if (side === "SUPPORT" && close < pivot.price) {
-          broken = true;
-          break;
-        }
-      }
+      const strength = levelStrength({
+        sourceTimeframe: tf,
+        recency,
+        isPrimaryTimeframe: tf === input.primaryTimeframe,
+      });
 
-      flatLevels.push({
-        id: `lvl-${input.symbol}-${tf}-${pivot.index}-${Math.round(pivot.price)}`,
+      const levelId = makeLevelId(input.symbol, tf, pivot);
+      levels.push({
+        id: levelId,
         price: pivot.price,
         wickPrice: pivot.wickPrice,
-        side,
+        side: pivot.side,
         sourceTimeframe: tf,
-        swingCandleTime,
-        swingCandleIndexOnPrimary: primaryIdx,
-        matchingTimeframes: [], // filled in by confluence pass below
+        swingCandleTime: pivot.candleOpenTime,
+        swingCandleIndexOnPrimary,
+        source: "swing",
+        matchingTimeframes: [],
         confluenceCount: 0,
         clusterMemberIds: [],
         recency,
-        strength: "trivial",
+        strength,
         graduatedToPoolId: null,
-        broken,
+        broken: breakResult.broken,
+        passes: {},
+      });
+
+      // Pool — wick territory beside the line
+    }
+
+    // Body-cluster identification — additive, runs per TF alongside swing
+    // pivots. Each cluster becomes a level with source="cluster" so the
+    // chart and table can distinguish them. Clusters do not generate pools
+    // (no single candle to define the wick zone).
+    const liquidityCandidates = findLiquidityPools({
+      symbol: input.symbol,
+      timeframe: tf,
+      candles,
+      depletionCandles: primaryCandles,
+    });
+
+    for (const candidate of liquidityCandidates) {
+      const rawIndex = findClosestCandleIndex(
+        primaryCandles,
+        candidate.sourceOpenTime,
+      );
+      const sourceIndexOnPrimary =
+        rawIndex < 0 ? -1 : Math.min(rawIndex, primaryCandles.length - 1);
+      const recency =
+        sourceIndexOnPrimary < 0
+          ? 0
+          : Math.min(
+              1,
+              sourceIndexOnPrimary / Math.max(1, primaryCandles.length - 1),
+            );
+      const strength = levelStrength({
+        sourceTimeframe: tf,
+        recency,
+        isPrimaryTimeframe: tf === input.primaryTimeframe,
+      });
+      pools.push({
+        id: `pool-${candidate.kind}-${candidate.idSeed}`,
+        symbol: input.symbol,
+        sourceTimeframe: tf,
+        type: candidate.side,
+        kind: candidate.kind,
+        linePrice: candidate.targetPrice,
+        wickHigh: candidate.zoneHigh,
+        wickLow: candidate.zoneLow,
+        centreLine: (candidate.zoneHigh + candidate.zoneLow) / 2,
+        birthCandleTime: candidate.sourceOpenTime,
+        birthCandleIndexOnPrimary: sourceIndexOnPrimary,
+        sweptCandleTime: null,
+        sweptCandleIndexOnPrimary: null,
+        sweepReason: null,
+        deathCandleTime: null,
+        deathCandleIndexOnPrimary: null,
+        deathReason: null,
+        status: "active",
+        confluenceCount: candidate.touchCount,
+        strength,
+        pull: null,
+      });
+    }
+
+    const closedCandles = candles.length > 1 ? candles.slice(0, -1) : candles;
+    const clusters = findBodyClusters({
+      candles: closedCandles,
+      tolerancePct: clusterTolerancePct(tf),
+    });
+    for (const cluster of clusters) {
+      const lastTouchPrimaryIdxRaw = findClosestCandleIndex(
+        primaryCandles,
+        cluster.lastTouchOpenTime,
+      );
+      const lastTouchPrimaryIdx =
+        lastTouchPrimaryIdxRaw < 0
+          ? -1
+          : Math.min(lastTouchPrimaryIdxRaw, primaryCandles.length - 1);
+      const firstTouchPrimaryIdxRaw = findClosestCandleIndex(
+        primaryCandles,
+        cluster.firstTouchOpenTime,
+      );
+      const firstTouchPrimaryIdx =
+        firstTouchPrimaryIdxRaw < 0
+          ? -1
+          : Math.min(firstTouchPrimaryIdxRaw, primaryCandles.length - 1);
+
+      // Brokenness for clusters: walk forward from the LAST touch on the
+      // source TF. If any subsequent close moved past the cluster price,
+      // it's broken. Reuses the same isLevelBroken contract by synthesising
+      // a pivot-shaped object pointing at the last touch index.
+      const synthPivot: BodyPivot = {
+        index: cluster.lastTouchIndex,
+        side: cluster.side,
+        price: cluster.price,
+        wickPrice: cluster.price,
+        candleOpenTime: cluster.lastTouchOpenTime,
+      };
+      const breakResult = isLevelBroken(candles, synthPivot);
+
+      // Recency from LAST touch — how recently the cluster was respected.
+      // The render start (swingCandleIndexOnPrimary) uses firstTouch so the
+      // line spans the whole respect history, but the relevance score
+      // tracks whether it's still in play.
+      const recencyClus =
+        lastTouchPrimaryIdx < 0
+          ? 0
+          : Math.min(
+              1,
+              lastTouchPrimaryIdx /
+                Math.max(1, primaryCandles.length - 1),
+            );
+
+      const strengthClus = levelStrength({
+        sourceTimeframe: tf,
+        recency: recencyClus,
+        isPrimaryTimeframe: tf === input.primaryTimeframe,
+      });
+
+      const clusterId = `cluster-${input.symbol}-${tf}-${cluster.firstTouchIndex}-${Math.round(cluster.price)}`;
+      levels.push({
+        id: clusterId,
+        price: cluster.price,
+        wickPrice: cluster.price,
+        side: cluster.side,
+        sourceTimeframe: tf,
+        swingCandleTime: cluster.firstTouchOpenTime,
+        swingCandleIndexOnPrimary: firstTouchPrimaryIdx,
+        source: "cluster",
+        matchingTimeframes: [],
+        confluenceCount: 0,
+        clusterMemberIds: [],
+        recency: recencyClus,
+        strength: strengthClus,
+        graduatedToPoolId: null,
+        broken: breakResult.broken,
+        passes: {},
       });
     }
   }
 
-  // 4. Confluence pass — cluster levels across TFs within tolerance.
-  const confluenceInputs: LevelInput[] = flatLevels.map((l) => ({
-    id: l.id,
-    price: l.price,
-    side: l.side,
-    sourceTimeframe: l.sourceTimeframe,
+  // 3. Run pass chain. Each pass is independent, sees the original
+  //    identified levels, writes its result under its own key. No pass
+  //    consumes another's evidence. Disabled passes write nothing.
+  const passConfig =
+    input.passConfig ??
+    getDefaultPassConfigForTimeframe(input.primaryTimeframe) ??
+    DEFAULT_PASS_CONFIG;
+  const passResult = runPasses(
+    {
+      levels,
+      perTfCandles,
+      primaryCandles,
+      primaryTimeframe: input.primaryTimeframe,
+    },
+    passConfig,
+  );
+
+  // 4. Pull score — per-active-pool ranking against current price (spec §4).
+  //    Computed after pools are formed, normalised across all active pools.
+  //    Feeds arm extraction (Step 3) and the right-frame canvas dominance.
+  const pulls = runPullPass(
+    { pools, primaryCandles },
+    DEFAULT_PULL_PASS_CONFIG,
+  );
+  const enrichedPools = pools.map((p) => ({
+    ...p,
+    pull: pulls.get(p.id) ?? null,
   }));
-  const confluenceMap = detectConfluence({
-    levels: confluenceInputs,
-    tolerancePct: 0.005,
-  });
-  for (const level of flatLevels) {
-    const info = confluenceMap.get(level.id);
-    if (info) {
-      level.matchingTimeframes = info.matchingTimeframes;
-      level.confluenceCount = info.confluenceCount;
-      level.clusterMemberIds = info.clusterMemberIds;
-    }
-    level.strength = combinedLevelStrength(
-      level.confluenceCount,
-      level.recency,
-      level.sourceTimeframe === input.primaryTimeframe,
-    );
-  }
 
-  // 5. Graduate levels into pools. A level becomes a pool if its strength
-  //    is medium or higher (confluence >= 2 OR recency >= 0.7). Pool
-  //    rectangles are one-sided on the stops side of the line.
-  const pools: AnalysisPool[] = [];
-  for (const level of flatLevels) {
-    if (level.strength === "trivial" || level.strength === "weak") continue;
-    const sourceCandles = perTfCandles.get(level.sourceTimeframe);
-    if (!sourceCandles || sourceCandles.length === 0) continue;
-    const atr = computeAtr14(sourceCandles, 14);
-    const currentPrice = primaryCandles[primaryCandles.length - 1].close;
-
-    const boundaries = setPoolBoundaries({
-      linePrice: level.price,
-      side: level.side,
-      atr,
-      offsetMultiplier: poolOffsetMult,
-      currentPrice,
-    });
-
-    // Choose the kind based on what dominated the strength
-    const kind: PoolKind =
-      level.confluenceCount >= 2 ? "historical_respect" : "untaken_liquidity";
-
-    const poolId = `pool-${input.symbol}-${level.sourceTimeframe}-${level.id}`;
-    pools.push({
-      id: poolId,
-      symbol: input.symbol,
-      sourceTimeframe: level.sourceTimeframe,
-      type: level.side,
-      kind,
-      linePrice: level.price,
-      wickHigh: boundaries.wickHigh,
-      wickLow: boundaries.wickLow,
-      centreLine: boundaries.centreLine,
-      birthCandleTime: level.swingCandleTime,
-      birthCandleIndexOnPrimary: level.swingCandleIndexOnPrimary,
-      deathCandleTime: null,
-      deathCandleIndexOnPrimary: null,
-      deathReason: null,
-      status: "active",
-      confluenceCount: level.confluenceCount,
-      strength: level.strength,
-    });
-    level.graduatedToPoolId = poolId;
-  }
-
-  // 6. Dead-pool detection. For each pool, walk forward through its SOURCE TF
-  //    candles starting from the candle after birth. Check engulfing
-  //    (single candle body crosses both boundaries) and sustained break
-  //    (3 consecutive closes beyond boundary). If a death event fires,
-  //    mark the pool dead and map the death candle time to the primary
-  //    TF's coordinate system for rendering.
-  for (const pool of pools) {
-    const sourceCandles = perTfCandles.get(pool.sourceTimeframe);
-    if (!sourceCandles || sourceCandles.length === 0) continue;
-
-    // Find the source-TF index of the birth candle
-    const birthIdx = sourceCandles.findIndex(
-      (c) => c.openTime === pool.birthCandleTime,
-    );
-    if (birthIdx < 0) continue;
-
-    for (let i = birthIdx + 1; i < sourceCandles.length; i++) {
-      const candle = sourceCandles[i];
-
-      // Engulfing — single-candle death
-      if (
-        detectEngulfingDeath({
-          candle,
-          poolWickHigh: pool.wickHigh,
-          poolWickLow: pool.wickLow,
-          poolType: pool.type,
-        })
-      ) {
-        pool.status = "dead";
-        pool.deathCandleTime = candle.openTime;
-        pool.deathCandleIndexOnPrimary = findClosestCandleIndex(
-          primaryCandles,
-          candle.openTime,
-        );
-        pool.deathReason = "engulfing";
-        break;
-      }
-
-      // Sustained break — last 3 closes
-      const lookbackStart = Math.max(birthIdx + 1, i - 2);
-      const recent = sourceCandles.slice(lookbackStart, i + 1);
-      if (recent.length >= 3) {
-        const sb = detectSustainedBreakDeath({
-          recentCandles: recent,
-          poolWickHigh: pool.wickHigh,
-          poolWickLow: pool.wickLow,
-          poolType: pool.type,
-        });
-        if (sb.dead) {
-          pool.status = "dead";
-          pool.deathCandleTime = candle.openTime;
-          pool.deathCandleIndexOnPrimary = findClosestCandleIndex(
-            primaryCandles,
-            candle.openTime,
-          );
-          pool.deathReason = "sustained_break";
-          break;
-        }
-      }
-    }
-  }
-
-  // 7. Merge confluent pools. After all pools have been graduated and
-  //    death-checked, collapse pools that sit at the same price (within
-  //    tolerance) on the same side into a single representative pool.
-  //    Prefer the higher-timeframe pool as the canonical one (Monthly >
-  //    Weekly > Daily > 4H > 1H > 15m), and combine confluence counts.
-  const mergedPools = mergeConfluentPools(pools);
-
-  // Re-link levels to the merged pool ids (any level whose
-  // graduatedToPoolId was on a pool that got merged should now point
-  // at the survivor).
-  const idMap = new Map<string, string>();
-  for (const original of pools) {
-    const survivor = mergedPools.find(
-      (m) =>
-        m.id === original.id ||
-        (Math.abs(m.linePrice - original.linePrice) / original.linePrice <
-          0.005 &&
-          m.type === original.type),
-    );
-    if (survivor) idMap.set(original.id, survivor.id);
-  }
-  for (const level of flatLevels) {
-    if (level.graduatedToPoolId && idMap.has(level.graduatedToPoolId)) {
-      level.graduatedToPoolId = idMap.get(level.graduatedToPoolId)!;
-    }
-  }
-
-  // Aggregate the depth snapshot against the primary TF's price range
-  // (with a 5% pad on each side so walls just outside the visible
-  // candles still show up). Failed fetch → depth: null, analysis still
-  // returns levels and pools intact.
-  let depthSnapshot: DepthSnapshot | null = null;
-  if (rawDepth !== null) {
-    let priceLow = primaryCandles[0].low;
-    let priceHigh = primaryCandles[0].high;
-    for (const c of primaryCandles) {
-      if (c.low < priceLow) priceLow = c.low;
-      if (c.high > priceHigh) priceHigh = c.high;
-    }
-    const pad = (priceHigh - priceLow) * 0.05;
-    depthSnapshot = aggregateDepthIntoBuckets({
-      raw: rawDepth,
-      priceLow: priceLow - pad,
-      priceHigh: priceHigh + pad,
-      bucketCount: 80,
-    });
-  }
+  // 5. Arm extraction — pick the top-pull pool above and below current
+  //    price (spec §2.10). The two arms drive the right-frame canvas.
+  const currentPrice =
+    primaryCandles.length > 0
+      ? primaryCandles[primaryCandles.length - 1].close
+      : 0;
+  const arms = extractArms({ pools: enrichedPools, currentPrice });
 
   return {
     symbol: input.symbol,
     primaryTimeframe: input.primaryTimeframe,
     analysedTimeframes: analysedTfs,
     candles: primaryCandles,
-    levels: flatLevels,
-    pools: mergedPools,
-    depth: depthSnapshot,
+    levels: passResult.levels,
+    pools: enrichedPools,
+    passInfo: passResult.passInfo,
+    arms,
+    depth: null,
+    orderFlow: null,
     computedAtMs: Date.now(),
   };
-}
-
-// TF priority for merging — higher-TF pools win when collapsed.
-const TF_PRIORITY: Record<Timeframe, number> = {
-  M: 6,
-  W: 5,
-  D: 4,
-  "12H": 3,
-  "4H": 2,
-  "1H": 1,
-  "15m": 0,
-};
-
-// Merge pools that are at the same price (within 1%) on the same side.
-// Higher-TF pool wins. The survivor's confluenceCount is the max of the group.
-//
-// 0.5% (the level-clustering tolerance) is too tight for cross-TF pool merging
-// because each TF's swing candle closes at a slightly different exact price,
-// and three TFs at "the same level" can spread $500-1000 on a $70k asset.
-// 1% catches genuine confluents without merging structurally-distinct levels.
-function mergeConfluentPools(pools: AnalysisPool[]): AnalysisPool[] {
-  const tolerance = 0.01;
-  const used = new Set<string>();
-  const survivors: AnalysisPool[] = [];
-
-  for (const a of pools) {
-    if (used.has(a.id)) continue;
-    const cluster = [a];
-    used.add(a.id);
-    for (const b of pools) {
-      if (used.has(b.id)) continue;
-      if (b.type !== a.type) continue;
-      const distance = Math.abs(b.linePrice - a.linePrice) / a.linePrice;
-      if (distance > tolerance) continue;
-      cluster.push(b);
-      used.add(b.id);
-    }
-    // Pick the highest-TF pool as the canonical
-    cluster.sort(
-      (x, y) => TF_PRIORITY[y.sourceTimeframe] - TF_PRIORITY[x.sourceTimeframe],
-    );
-    const winner = { ...cluster[0] };
-    winner.confluenceCount = Math.max(...cluster.map((c) => c.confluenceCount));
-    // If any pool in the cluster died, the cluster is dead
-    const dead = cluster.find((c) => c.status === "dead");
-    if (dead) {
-      winner.status = "dead";
-      winner.deathCandleTime = dead.deathCandleTime;
-      winner.deathCandleIndexOnPrimary = dead.deathCandleIndexOnPrimary;
-      winner.deathReason = dead.deathReason;
-    }
-    survivors.push(winner);
-  }
-
-  return survivors;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 
-// Find the candle whose openTime is closest to the given time.
-// Returns negative index marker if the time is before the window starts
-// (so the renderer can clip pool rectangles to the visible left edge
-// without pretending the swing happened at index 0).
-//   - if openTime < first candle: returns -1 (pool is "older than visible")
-//   - if openTime > last candle:  returns candles.length (pool is "newer than visible" — should never happen)
-//   - otherwise:                  returns the closest index inside the window
-function findClosestCandleIndex(candles: Candle[], openTime: number): number {
+function makeLevelId(symbol: string, tf: Timeframe, pivot: BodyPivot): string {
+  return `lvl-${symbol}-${tf}-${pivot.index}-${Math.round(pivot.price)}`;
+}
+
+function clusterTolerancePct(tf: Timeframe): number {
+  switch (tf) {
+    case "15m":
+      return 0.0015;
+    case "1H":
+      return 0.002;
+    case "4H":
+      return 0.0028;
+    case "12H":
+      return 0.0035;
+    case "D":
+      return 0.0045;
+    case "W":
+      return 0.007;
+    case "M":
+      return 0.01;
+    default:
+      return 0.0025;
+  }
+}
+
+// Map a candle openTime into the primary TF's index space so the renderer
+// has a clean X coordinate. Returns -1 if the time predates the visible
+// window (renderer clips to left edge).
+function findClosestCandleIndex(
+  candles: Candle[],
+  openTime: number,
+): number {
   if (candles.length === 0) return 0;
   if (openTime < candles[0].openTime) return -1;
   if (openTime > candles[candles.length - 1].openTime) return candles.length;

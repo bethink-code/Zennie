@@ -7,7 +7,9 @@ import { isAuthenticated } from "../auth";
 import { BinanceProvider } from "../modules/zenny/infrastructure/providers/binanceProvider";
 import { DEFAULT_INFRASTRUCTURE_CONFIG } from "../modules/zenny/infrastructure/types";
 import { runAnalysis } from "../modules/zenny/analysis/orchestrator";
+import type { PassConfig } from "../modules/zenny/analysis/passes/types";
 import type { Timeframe } from "../../shared/zennyTypes";
+import { getDefaultBraidCountForTimeframe } from "../../shared/zennyBraidDefaults";
 
 // Single shared provider per process (Observer pattern — multi-tenant friendly).
 // In Phase 6 this becomes per-symbol via createMarketDataService.
@@ -30,7 +32,7 @@ const VALID_TIMEFRAMES: ReadonlySet<Timeframe> = new Set([
 ]);
 
 export function registerZennyRoutes(app: Express) {
-  // GET /api/zenny/braid-view-model?symbol=BTCUSDT&timeframe=D&count=200
+  // GET /api/zenny/braid-view-model?symbol=BTCUSDT&timeframe=1H&count=300
   // Runs the analysis pipeline and returns the AnalysisState as JSON.
   // Phase 1: Daily-only, no multi-TF confluence, no death detection.
   app.get(
@@ -39,10 +41,17 @@ export function registerZennyRoutes(app: Express) {
     async (req: Request, res: Response) => {
       try {
         const symbol = String(req.query.symbol || "BTCUSDT").toUpperCase();
-        const timeframe = String(req.query.timeframe || "D") as Timeframe;
+        const timeframe = String(req.query.timeframe || "1H") as Timeframe;
+        const defaultCount = VALID_TIMEFRAMES.has(timeframe)
+          ? getDefaultBraidCountForTimeframe(timeframe)
+          : getDefaultBraidCountForTimeframe("1H");
         const count = Math.min(
           1500,
-          Math.max(50, parseInt(String(req.query.count || "200"), 10) || 200),
+          Math.max(
+            50,
+            parseInt(String(req.query.count || defaultCount), 10) ||
+              defaultCount,
+          ),
         );
 
         if (!VALID_TIMEFRAMES.has(timeframe)) {
@@ -52,12 +61,25 @@ export function registerZennyRoutes(app: Express) {
           });
         }
 
+        // passConfig is optional, JSON-encoded in the query string. Frontend
+        // builds the config object and stringifies it. Absent or invalid
+        // → orchestrator falls back to DEFAULT_PASS_CONFIG.
+        let passConfig: PassConfig | undefined;
+        if (typeof req.query.passConfig === "string") {
+          try {
+            passConfig = JSON.parse(req.query.passConfig) as PassConfig;
+          } catch {
+            // Silently fall back to default; bad config shouldn't 500.
+          }
+        }
+
         const provider = getProvider();
         const state = await runAnalysis({
           provider,
           symbol,
           primaryTimeframe: timeframe,
           candleCountPerTf: count,
+          passConfig,
         });
 
         res.json(state);

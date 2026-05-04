@@ -9,6 +9,8 @@ interface CacheEntry {
   lastUpdatedMs: number;
 }
 
+const CACHE_TTL_MS = 30_000;
+
 export class CandleCache {
   private store = new Map<string, CacheEntry>();
 
@@ -22,11 +24,13 @@ export class CandleCache {
     symbol: string,
     timeframe: Timeframe,
     count: number,
+    nowMs = Date.now(),
   ): Candle[] | null {
     const entry = this.store.get(this.key(symbol, timeframe));
     if (!entry) return null;
     if (entry.candles.length === 0) return null;
     if (entry.candles.length < count) return null; // not enough cached, refetch
+    if (nowMs - entry.lastUpdatedMs > CACHE_TTL_MS) return null;
     return entry.candles.slice(-count);
   }
 
