@@ -6,8 +6,6 @@ import { setupAuth } from "./auth";
 import { registerRoutes } from "./routes";
 import { registerZennyRoutes } from "./routes/zennyRoutes";
 import { registerHyblockRoutes } from "./routes/hyblockRoutes";
-import { startBotRunner } from "./modules/botRunner";
-import { cleanupStaleRunningSessions } from "./modules/autoresearch/orchestrator";
 import { startContinuityScheduler } from "./modules/zenny/infrastructure/binanceContinuity/startContinuityScheduler";
 import { startLiquidationListener } from "./modules/zenny/infrastructure/binanceLiquidations/startLiquidationListener";
 
@@ -95,13 +93,6 @@ app.listen(PORT, () => {
   console.log(`[phoenix-v96] server listening on :${PORT}`);
   console.log(
     `[phoenix-v96] paper-trading=${process.env.PAPER_TRADING_MODE} env=${process.env.NODE_ENV}`
-  );
-  // Old bot runner disabled during Zenny rebuild.
-  // The two-wire braid + decision module replaces it; until that lands,
-  // nothing should be opening paper trades.
-  // startBotRunner();
-  cleanupStaleRunningSessions().catch((err) =>
-    console.error("[autoresearch] cleanup failed", err)
   );
   startContinuityScheduler();
   startLiquidationListener();

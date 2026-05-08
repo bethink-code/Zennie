@@ -1,5 +1,4 @@
-import type { Candle } from "../strategy/types";
-import type { ExchangeAdapter, Timeframe } from "./types";
+import type { Candle, ExchangeAdapter, Timeframe } from "./types";
 
 // Binance adapter — REST only for Phase 1. Websocket live data is a Phase 2
 // upgrade once the decision loop is proven.

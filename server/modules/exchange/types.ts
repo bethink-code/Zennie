@@ -1,10 +1,19 @@
-import type { Candle } from "../strategy/types";
-
 // Exchange adapter interface. Concrete implementations (Binance, Bybit) live
-// in sibling files. Swapping exchanges = swapping the implementation; the
-// bot runner and strategy engine only see this shape.
+// in sibling files. Only fetchSymbols is consumed today (admin pair registry
+// in routes.ts) — fetchCandles + fetchPrice are kept for callers that may
+// land before the Zenny infrastructure provider takes over fully.
 
 export type Timeframe = "15m" | "1h" | "4h" | "12h" | "1d";
+
+export interface Candle {
+  openTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  closeTime: number;
+}
 
 export interface ExchangeAdapter {
   readonly name: string;
