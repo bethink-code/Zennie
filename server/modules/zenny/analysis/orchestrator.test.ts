@@ -106,7 +106,7 @@ describe("runAnalysis (orchestrator integration)", () => {
     });
 
     expect(state.passInfo.wireAngle).toBeDefined();
-    const wa = state.passInfo.wireAngle!;
+    const wa = state.passInfo.wireAngle!.primary;
     expect(typeof wa.angleDeg).toBe("number");
     expect(["NO_TRADE", "ACCUMULATION", "RANGING", "TRENDING", "BREAKOUT"]).toContain(
       wa.gannBracket,
@@ -114,6 +114,14 @@ describe("runAnalysis (orchestrator integration)", () => {
     expect(["up", "down", "flat"]).toContain(wa.direction);
     expect(typeof wa.tradePermitted).toBe("boolean");
     expect(wa.lookback).toBeGreaterThanOrEqual(2);
+
+    // Multi-TF: every TF the orchestrator actually analysed should appear
+    // in perTimeframe (when it has enough candles). Primary is always there
+    // because we've already asserted the result is defined.
+    const result = state.passInfo.wireAngle!;
+    expect(result.perTimeframe[state.primaryTimeframe]).toBeDefined();
+    expect(typeof result.agreement.matchingDirectionRatio).toBe("number");
+    expect(["yes", "mixed", "no"]).toContain(result.agreement.htfConfirms);
   });
 
   it("populates pull on every active pool, leaves swept/dead null", async () => {

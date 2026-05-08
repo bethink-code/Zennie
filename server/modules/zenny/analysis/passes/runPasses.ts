@@ -19,7 +19,10 @@ import {
 } from "./lastLegPass";
 import { runAggregatePass } from "./aggregatePass";
 import { runPolarityFlipPass } from "./polarityFlipPass";
-import { runWireAnglePass, type WireAnglePassInfo } from "./wireAnglePass";
+import {
+  runWireAnglePass,
+  type WireAnglePassResult,
+} from "./wireAnglePass";
 
 // Some passes have GLOBAL state that the renderer needs (not per-level).
 // We expose it as `passInfo`: a parallel bag where each pass can stash a
@@ -30,7 +33,7 @@ export interface PassInfo {
   lastLeg?: {
     swings: LastLegSwing[];
   };
-  wireAngle?: WireAnglePassInfo;
+  wireAngle?: WireAnglePassResult;
 }
 
 export interface RunPassesResult {

@@ -491,13 +491,13 @@ export default function Braid() {
               markPriceY={markPriceY}
               collapsedContent={
                 <NowBadgeCollapsed
-                  wireAngle={data.passInfo?.wireAngle ?? null}
+                  wireAngle={data.passInfo?.wireAngle?.primary ?? null}
                   chartHeight={chartHeight}
                 />
               }
               expandedContent={
                 <NowBadgeExpanded
-                  wireAngle={data.passInfo?.wireAngle ?? null}
+                  wireAngle={data.passInfo?.wireAngle?.primary ?? null}
                   chartHeight={chartHeight}
                 />
               }

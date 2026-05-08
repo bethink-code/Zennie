@@ -277,13 +277,33 @@ export interface WireAnglePassInfoClient {
   pctChange: number;
 }
 
+// Multi-TF agreement summary — mirrors WireAngleAgreement on the server.
+// Derived from the per-TF angles. The decision module reads htfConfirms
+// for conviction; the renderer reads ratio + counts for the regime column.
+export interface WireAngleAgreementClient {
+  matchingDirectionCount: number;
+  totalAnalysed: number;
+  matchingDirectionRatio: number;
+  alignedTradePermittedCount: number;
+  weakestAlignedBracket: GannBracketClient | null;
+  htfConfirms: "yes" | "mixed" | "no";
+}
+
+// Mirror of WireAnglePassResult on the server. Primary is the spec gate;
+// perTimeframe is sparse (TFs with too few candles are absent).
+export interface WireAnglePassResultClient {
+  primary: WireAnglePassInfoClient;
+  perTimeframe: Partial<Record<Timeframe, WireAnglePassInfoClient>>;
+  agreement: WireAngleAgreementClient;
+}
+
 // Global pass output — non-per-level data the renderer consumes directly.
 // Each pass that has structural (cross-level) output stashes it here.
 export interface PassInfoClient {
   lastLeg?: {
     swings: LastLegSwingClient[];
   };
-  wireAngle?: WireAnglePassInfoClient;
+  wireAngle?: WireAnglePassResultClient;
 }
 
 export interface AnalysisStateClient {
