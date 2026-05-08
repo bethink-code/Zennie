@@ -56,7 +56,24 @@ import {
   computeRegimeHistory,
   type BarRegimeSnapshot,
 } from "./regime/regimeHistory";
-import type { RegimeAssessmentResult } from "./regime/types";
+import type {
+  RegimeAssessmentResult,
+  TfRegimeAssessment,
+} from "./regime/types";
+
+// TF rank ordering — higher number = higher (slower) timeframe. Used to
+// filter pools per-TF: a TF chart should consider only pools at or above
+// its own rank (15m chart = all TFs; Monthly chart = only Monthly).
+// Mirrors the same rule LeftFrameCanvas uses for level rendering.
+const TF_RANK: Record<Timeframe, number> = {
+  "15m": 0,
+  "1H": 1,
+  "4H": 2,
+  "12H": 3,
+  D: 4,
+  W: 5,
+  M: 6,
+};
 
 // ---------------------------------------------------------------------------
 // Output types — kept compatible with the Braid's AnalysisStateClient.
@@ -141,16 +158,24 @@ export interface AnalysisState {
   // Two-arm braid output (spec §2.10). Top-pull active pool above and
   // below current price, gated by ARM_MINIMUM_PULL=15.0. Drives the
   // right-frame canvas. Both null when no qualifying pools exist.
+  // Convenience field — equal to armsPerTimeframe[primaryTimeframe].
   arms: ExtractedArms;
+  // Per-TF arms — each TF runs its own arm extraction against its own
+  // candles + price + relevant pool subset (pools at or above the TF's
+  // rank). Implements per-TF self-containment: each TF is its own
+  // complete trading environment.
+  armsPerTimeframe: Partial<Record<Timeframe, ExtractedArms>>;
   // Regime layer's per-playbook output for the trading module + the UI.
   // Null when wire-angle pass didn't run on the primary TF (insufficient
   // candles). See server/modules/zenny/analysis/regime/.
   regimeAssessment: RegimeAssessmentResult | null;
-  // Per-bar regime snapshots — full playbook composite at every primary
-  // candle that has wire-angle data, so the timeline strip shows what
-  // playbook (if any) applied at each bar. Cached forever per
-  // (symbol, tf, candleOpenTime).
+  // Per-bar regime snapshots for the primary TF. Convenience field —
+  // equal to regimeHistoryPerTimeframe[primaryTimeframe].
   regimeHistory: BarRegimeSnapshot[];
+  // Per-TF regime history — full playbook composite at every bar of
+  // every analysed TF. Cached forever per (symbol, tf, candleOpenTime).
+  // Lets any TF's chart render its own timeline strip without a refetch.
+  regimeHistoryPerTimeframe: Partial<Record<Timeframe, BarRegimeSnapshot[]>>;
   depth: null; // out of brief; stays null until the user asks for it back
   orderFlow: null;
   computedAtMs: number;
@@ -216,8 +241,10 @@ export async function runAnalysis(
       pools: [],
       passInfo: {},
       arms: { upper: null, lower: null, dominantSide: "neither" },
+      armsPerTimeframe: {},
       regimeAssessment: null,
       regimeHistory: [],
+      regimeHistoryPerTimeframe: {},
       depth: null,
       orderFlow: null,
       computedAtMs: Date.now(),
@@ -434,59 +461,104 @@ export async function runAnalysis(
     passConfig,
   );
 
-  // 4. Pull score — per-active-pool ranking against current price (spec §4).
-  //    Computed after pools are formed, normalised across all active pools.
-  //    Feeds arm extraction (Step 3) and the right-frame canvas dominance.
-  const pulls = runPullPass(
-    { pools, primaryCandles },
-    DEFAULT_PULL_PASS_CONFIG,
-  );
-  const enrichedPools = pools.map((p) => ({
-    ...p,
-    pull: pulls.get(p.id) ?? null,
-  }));
+  // 4–7. Per-TF self-containment chain — for every analysed TF, run
+  //      pull → arms → assessment → regime-history independently against
+  //      that TF's own candles, price, and pool subset (pools at or
+  //      above the TF's rank — sub-resolution pools from faster TFs are
+  //      noise on slower charts). Each TF becomes its own complete
+  //      trading environment.
+  const wireAngle = passResult.passInfo.wireAngle;
+  const armsPerTimeframe: Partial<Record<Timeframe, ExtractedArms>> = {};
+  const enrichedPoolsPerTimeframe: Partial<Record<Timeframe, AnalysisPool[]>> = {};
+  const regimeAssessmentPerTimeframe: Partial<
+    Record<Timeframe, TfRegimeAssessment>
+  > = {};
+  const regimeHistoryPerTimeframe: Partial<
+    Record<Timeframe, BarRegimeSnapshot[]>
+  > = {};
 
-  // 5. Arm extraction — pick the top-pull pool above and below current
-  //    price (spec §2.10). The two arms drive the right-frame canvas.
-  const currentPrice =
-    primaryCandles.length > 0
-      ? primaryCandles[primaryCandles.length - 1].close
-      : 0;
-  const arms = extractArms({ pools: enrichedPools, currentPrice });
+  for (const tf of analysedTfs) {
+    const tfCandles = perTfCandles.get(tf);
+    if (!tfCandles || tfCandles.length === 0) continue;
+    const tfPrice = tfCandles[tfCandles.length - 1].close;
+    if (tfPrice <= 0) continue;
 
-  // 6. Regime assessment — composite per-playbook verdict for the trading
-  //    module + the UI. Reads wire-angle bracket, dwell, HTF agreement,
-  //    arms, pool structure; flags every signal not yet wired (tick
-  //    processing, market quality) as `available: false` so the card can
-  //    surface what evidence is missing without fabricating values.
-  const regimeAssessment =
-    passResult.passInfo.wireAngle !== undefined
-      ? assembleRegimeAssessment({
-          primaryTimeframe: input.primaryTimeframe,
-          wireAngle: passResult.passInfo.wireAngle,
-          arms,
-          pools: enrichedPools,
-          levels: passResult.levels,
-          currentPrice,
-          totalCandles: primaryCandles.length,
-        })
+    // Pools at or above this TF's rank. A 4H trader doesn't care about
+    // 15m / 1H pools (sub-resolution); a Daily trader cares about D/W/M
+    // only; etc.
+    const tfRank = TF_RANK[tf];
+    const relevantPools = pools.filter(
+      (p) => (TF_RANK[p.sourceTimeframe] ?? 0) >= tfRank,
+    );
+
+    // Pull recomputed against THIS TF's candles + price.
+    const tfPulls = runPullPass(
+      { pools: relevantPools, primaryCandles: tfCandles },
+      DEFAULT_PULL_PASS_CONFIG,
+    );
+    const tfEnrichedPools = relevantPools.map((p) => ({
+      ...p,
+      pull: tfPulls.get(p.id) ?? null,
+    }));
+    enrichedPoolsPerTimeframe[tf] = tfEnrichedPools;
+
+    // Arms for this TF.
+    const tfArms = extractArms({
+      pools: tfEnrichedPools,
+      currentPrice: tfPrice,
+    });
+    armsPerTimeframe[tf] = tfArms;
+
+    // Regime assessment + history depend on the wire-angle pass running
+    // on this TF (it must have enough candles for the lookback).
+    if (wireAngle !== undefined && wireAngle.perTimeframe[tf]) {
+      const tfAssessment = assembleRegimeAssessment({
+        primaryTimeframe: tf,
+        wireAngle,
+        arms: tfArms,
+        pools: tfEnrichedPools,
+        levels: passResult.levels,
+        currentPrice: tfPrice,
+        totalCandles: tfCandles.length,
+      });
+      if (tfAssessment) {
+        regimeAssessmentPerTimeframe[tf] = tfAssessment.primary;
+      }
+
+      // Per-bar history — cached per (symbol, tf, candleOpenTime, N) so
+      // first analysis tick computes; subsequent ticks only compute new
+      // bars on each TF.
+      regimeHistoryPerTimeframe[tf] = computeRegimeHistory({
+        symbol: input.symbol,
+        primaryTimeframe: tf,
+        primaryCandles: tfCandles,
+        pools: tfEnrichedPools,
+        levels: passResult.levels,
+        wireAngle,
+      });
+    }
+  }
+
+  // Top-level convenience fields — alias the primary TF's per-TF entries
+  // so existing consumers (right-frame canvas, current strip render) keep
+  // working without indexing through the maps.
+  const primaryArms = armsPerTimeframe[input.primaryTimeframe] ?? {
+    upper: null,
+    lower: null,
+    dominantSide: "neither",
+  };
+  const primaryEnrichedPools =
+    enrichedPoolsPerTimeframe[input.primaryTimeframe] ??
+    pools.map((p) => ({ ...p, pull: null }));
+  const primaryRegimeHistory =
+    regimeHistoryPerTimeframe[input.primaryTimeframe] ?? [];
+  const regimeAssessment: RegimeAssessmentResult | null =
+    regimeAssessmentPerTimeframe[input.primaryTimeframe]
+      ? {
+          primary: regimeAssessmentPerTimeframe[input.primaryTimeframe]!,
+          perTimeframe: regimeAssessmentPerTimeframe,
+        }
       : null;
-
-  // 7. Per-bar regime history — runs the full playbook composite at every
-  //    primary candle for the timeline strip. Cached per
-  //    (symbol, tf, candleOpenTime); first run computes everything,
-  //    subsequent runs only compute new bars.
-  const regimeHistory =
-    passResult.passInfo.wireAngle !== undefined
-      ? computeRegimeHistory({
-          symbol: input.symbol,
-          primaryTimeframe: input.primaryTimeframe,
-          primaryCandles,
-          pools: enrichedPools,
-          levels: passResult.levels,
-          wireAngle: passResult.passInfo.wireAngle,
-        })
-      : [];
 
   return {
     symbol: input.symbol,
@@ -494,11 +566,13 @@ export async function runAnalysis(
     analysedTimeframes: analysedTfs,
     candles: primaryCandles,
     levels: passResult.levels,
-    pools: enrichedPools,
+    pools: primaryEnrichedPools,
     passInfo: passResult.passInfo,
-    arms,
+    arms: primaryArms,
+    armsPerTimeframe,
     regimeAssessment,
-    regimeHistory,
+    regimeHistory: primaryRegimeHistory,
+    regimeHistoryPerTimeframe,
     depth: null,
     orderFlow: null,
     computedAtMs: Date.now(),

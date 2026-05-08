@@ -485,8 +485,16 @@ export interface AnalysisStateClient {
   pools: AnalysisPoolClient[];
   passInfo: PassInfoClient;
   arms: ExtractedArmsClient;
+  // Per-TF arms — each analysed TF runs its own arm extraction against
+  // its own candles + price + relevant pool subset.
+  armsPerTimeframe: Partial<Record<Timeframe, ExtractedArmsClient>>;
   regimeAssessment: RegimeAssessmentResultClient | null;
   regimeHistory: BarRegimeSnapshotClient[];
+  // Per-TF regime history — full playbook composite at every bar of
+  // every analysed TF. Lets any TF's chart render its own timeline strip.
+  regimeHistoryPerTimeframe: Partial<
+    Record<Timeframe, BarRegimeSnapshotClient[]>
+  >;
   depth: DepthSnapshotClient | null;
   orderFlow: OrderFlowSnapshotClient | null;
   computedAtMs: number;

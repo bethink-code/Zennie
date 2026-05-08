@@ -1173,10 +1173,16 @@ function drawCanvas(
   // through. The first ~16 bars (smoothing + lookback) and the last 2 bars
   // (smoothing tail) have no data and also render blank — honest about
   // the lookback boundary rather than fabricating a value.
-  if (opts.showRegimeStrip && state.regimeHistory.length > 0) {
+  //
+  // Reads from regimeHistoryPerTimeframe indexed by primary — under the
+  // per-TF self-containment model, each TF carries its own history; the
+  // chart shows whichever TF is currently primary.
+  const tfHistory =
+    state.regimeHistoryPerTimeframe[state.primaryTimeframe] ?? [];
+  if (opts.showRegimeStrip && tfHistory.length > 0) {
     const stripTop = 6;
     const stripHeight = 6;
-    for (const entry of state.regimeHistory) {
+    for (const entry of tfHistory) {
       if (entry.candleIndex < 0 || entry.candleIndex >= dims.N) continue;
       if (!entry.recommended) continue; // blank when no playbook applies
       const cx = dims.toX(entry.candleIndex);
