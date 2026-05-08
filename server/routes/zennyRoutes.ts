@@ -11,6 +11,16 @@ import { fetchRecentLiquidations } from "../modules/zenny/analysis/data/fetchRec
 import type { PassConfig } from "../modules/zenny/analysis/passes/types";
 import type { Timeframe } from "../../shared/zennyTypes";
 import { getDefaultBraidCountForTimeframe } from "../../shared/zennyBraidDefaults";
+import { runPaperTradeTick } from "../modules/zenny/runner/runPaperTradeTick";
+import {
+  listPositions,
+  loadAccount,
+} from "../modules/zenny/persistence/paperTradeStore";
+
+// Pairs to tick on each cron run. Keep small in v0; extend later.
+const PAPER_TRADE_WATCHLIST: Array<{ symbol: string; timeframe: Timeframe }> = [
+  { symbol: "BTCUSDT", timeframe: "1H" },
+];
 
 // Single shared provider per process (Observer pattern — multi-tenant friendly).
 // In Phase 6 this becomes per-symbol via createMarketDataService.
@@ -118,6 +128,81 @@ export function registerZennyRoutes(app: Express) {
         breaker: provider.getBreakerState(),
         recentApiCalls: provider.getApiCallLog().slice(-20),
       });
+    },
+  );
+
+  // POST /api/zenny/paper-trade-tick — Vercel Cron entrypoint.
+  // Auth: Bearer <CRON_SECRET>. Vercel sets the header automatically when
+  // CRON_SECRET is configured as an env var on the project.
+  // Idempotent: hitting it twice in the same hour is safe (lookahead guard
+  // in reduceStep skips already-evaluated bars).
+  app.post(
+    "/api/zenny/paper-trade-tick",
+    async (req: Request, res: Response) => {
+      const auth = req.headers.authorization ?? "";
+      const expected = process.env.CRON_SECRET;
+      if (!expected) {
+        return res.status(503).json({
+          error: "cron_secret_not_configured",
+          hint: "Set CRON_SECRET in Doppler before invoking.",
+        });
+      }
+      if (auth !== `Bearer ${expected}`) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+      try {
+        const provider = getProvider();
+        const results = [];
+        for (const watch of PAPER_TRADE_WATCHLIST) {
+          try {
+            const r = await runPaperTradeTick({
+              provider,
+              symbol: watch.symbol,
+              timeframe: watch.timeframe,
+            });
+            results.push(r);
+          } catch (e) {
+            results.push({
+              symbol: watch.symbol,
+              timeframe: watch.timeframe,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
+        res.json({ ok: true, tickedAt: Date.now(), results });
+      } catch (err) {
+        console.error("[zenny] paper-trade-tick failed", err);
+        res.status(500).json({
+          error: "tick_failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // GET /api/zenny/paper-trades — list paper-trading positions for review.
+  // No auth in v0 — read-only, no PII; tighten when adding multi-tenant.
+  app.get(
+    "/api/zenny/paper-trades",
+    async (req: Request, res: Response) => {
+      try {
+        const symbol = String(req.query.symbol || "BTCUSDT").toUpperCase();
+        const timeframe = String(req.query.timeframe || "1H") as Timeframe;
+        const limit = Math.min(
+          500,
+          Math.max(1, parseInt(String(req.query.limit || "100"), 10) || 100),
+        );
+        const [positions, account] = await Promise.all([
+          listPositions(symbol, timeframe, limit),
+          loadAccount(),
+        ]);
+        res.json({ symbol, timeframe, positions, account });
+      } catch (err) {
+        res.status(500).json({
+          error: "fetch_failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     },
   );
 }

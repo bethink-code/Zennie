@@ -10,6 +10,10 @@ import { NowColumn } from "@/components/braid/NowColumn";
 import { LevelsColumnCollapsed, LevelsColumnExpanded } from "@/components/braid/LevelsColumn";
 import { NowBadgeCollapsed, NowBadgeExpanded } from "@/components/braid/NowBadge";
 import { OrderFlowColumn } from "@/components/braid/OrderFlowColumn";
+import {
+  OrdersStrategyColumnCollapsed,
+  OrdersStrategyColumnExpanded,
+} from "@/components/braid/OrdersStrategyColumn";
 import { RightFrameCanvas } from "@/components/braid/RightFrameCanvas";
 import { TradesColumnCollapsed, TradesColumnExpanded } from "@/components/braid/TradesColumn";
 import { LiqOverlay } from "@/components/braid/LiqOverlay";
@@ -572,26 +576,17 @@ export default function Braid() {
               }}
               chartHeight={chartHeight}
               collapsedContent={
-                <OrderFlowColumn
-                  depth={data.depth}
-                  orderFlow={data.orderFlow}
+                <OrdersStrategyColumnCollapsed
+                  tradePlan={data.tradePlan}
+                  assessment={data.regimeAssessment}
                   chartHeight={chartHeight}
-                  priceMin={priceMin}
-                  priceMax={priceMax}
-                  padTop={CHART_PAD.t}
-                  padBottom={CHART_PAD.b}
-                  liqHeatmapLevels={liqData?.levels}
-                  showLiqHeatmap={showLiqHeatmap}
-                  candles={data.candles}
                 />
               }
               expandedContent={
-                <OrderFlowExpandedContent
-                  orderFlow={data.orderFlow}
-                  liqLevels={liqData?.levels}
-                  candles={data.candles}
-                  priceMin={priceMin}
-                  priceMax={priceMax}
+                <OrdersStrategyColumnExpanded
+                  tradePlan={data.tradePlan}
+                  assessment={data.regimeAssessment}
+                  chartHeight={chartHeight}
                 />
               }
             />

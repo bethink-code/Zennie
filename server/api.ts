@@ -6,6 +6,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { setupAuth } from "./auth";
 import { registerRoutes } from "./routes";
+import { registerZennyRoutes } from "./routes/zennyRoutes";
 
 const app = express();
 const isProd = process.env.NODE_ENV === "production";
@@ -61,6 +62,7 @@ app.use(
 
 setupAuth(app);
 registerRoutes(app);
+registerZennyRoutes(app);
 
 app.use(
   (

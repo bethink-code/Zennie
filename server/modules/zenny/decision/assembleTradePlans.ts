@@ -1,6 +1,6 @@
-// assembleTradePlans — top-level entry that runs once per analysed TF
-// and produces a TradePlan when the regime layer has a recommended
-// playbook for that TF.
+// assembleTradePlans — top-level entry that runs once per analysed TF and
+// produces a TradePlan when proposeWickTrade resolves geometry for the
+// regime's recommended playbook.
 //
 // Per the per-TF self-containment model, each TF stands alone: its own
 // regime assessment, its own arms + pools, its own trade plan. Cross-TF
@@ -9,33 +9,26 @@
 // Pure function. No DB. No order placement. The execution module
 // consumes these plans (when built) and turns them into orders.
 
-import type { Timeframe } from "../../../../shared/zennyTypes";
-import type {
-  AnalysisPool,
-} from "../analysis/orchestrator";
+import type { Candle, Timeframe } from "../../../../shared/zennyTypes";
 import type { ExtractedArms } from "../analysis/arms/extractArms";
+import type { AnalysisPool } from "../analysis/orchestrator";
 import type {
-  Playbook,
   RegimeAssessmentResult,
   TfRegimeAssessment,
 } from "../analysis/regime/types";
-import type { Candle } from "../../../../shared/zennyTypes";
-import {
-  proposeAccumulationTrade,
-  proposeBreakoutTrade,
-  proposeRangingTrade,
-  proposeTrendingTrade,
-} from "./proposeTradePlan";
 import type { TradePlan, TradePlanResult } from "./types";
+import { proposeWickTrade } from "./wick/proposeWickTrade";
+import type { WickTradeConfig } from "./wick/types";
 
 export interface AssembleTradePlansInput {
   primaryTimeframe: Timeframe;
-  // Per-TF candles + arms + pools. Only TFs present here get a trade
-  // plan computed — TFs without these inputs are skipped.
   perTfCandles: Map<Timeframe, Candle[]>;
   armsPerTimeframe: Partial<Record<Timeframe, ExtractedArms>>;
   enrichedPoolsPerTimeframe: Partial<Record<Timeframe, AnalysisPool[]>>;
   regimeAssessment: RegimeAssessmentResult | null;
+  // Optional config override — when paper-trade tuning lands, this is how
+  // a tenant or session swaps in a non-default WickTradeConfig.
+  wickConfig?: WickTradeConfig;
 }
 
 export function assembleTradePlans(
@@ -59,13 +52,14 @@ export function assembleTradePlans(
     const currentPrice = tfCandles[tfCandles.length - 1].close;
     if (currentPrice <= 0) continue;
 
-    const plan = proposeForPlaybook(tfAssessment.recommended.playbook, {
+    const plan = proposeWickTrade({
       timeframe: tf,
       candles: tfCandles,
       currentPrice,
       arms: tfArms,
       pools: tfPools,
       assessment: tfAssessment,
+      config: input.wickConfig,
     });
     if (plan !== null) perTimeframe[tf] = plan;
   }
@@ -74,26 +68,4 @@ export function assembleTradePlans(
     primary: perTimeframe[input.primaryTimeframe] ?? null,
     perTimeframe,
   };
-}
-
-// Dispatch to the right proposer based on playbook name. Single switch
-// keeps the assembler agnostic of per-playbook geometry.
-function proposeForPlaybook(
-  playbook: Playbook,
-  ctx: Parameters<typeof proposeRangingTrade>[0],
-): TradePlan | null {
-  switch (playbook) {
-    case "ranging":
-      return proposeRangingTrade(ctx);
-    case "trending":
-      return proposeTrendingTrade(ctx);
-    case "breakout":
-      return proposeBreakoutTrade(ctx);
-    case "accumulation":
-      return proposeAccumulationTrade(ctx);
-    default:
-      // Exhaustiveness check — TS will yell if a new playbook lands
-      // without a case here.
-      return null;
-  }
 }

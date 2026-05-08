@@ -11,5 +11,11 @@
     { "source": "/api/(.*)", "destination": "/api/index.mjs" },
     { "source": "/auth/(.*)", "destination": "/api/index.mjs" },
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/zenny/paper-trade-tick",
+      "schedule": "0 * * * *"
+    }
   ]
 }

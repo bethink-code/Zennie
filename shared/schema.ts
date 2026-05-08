@@ -841,6 +841,99 @@ export const binanceLiquidations = pgTable(
 );
 
 // ============================================================================
+// Zenny paper trading — runner-managed position lifecycle and account state
+// ============================================================================
+
+// One row per position throughout its lifecycle. Status field tracks state.
+// CLOSED rows are kept forever (the audit trail); active rows are queried
+// by status filter on every cron tick.
+//
+// Columns mirror server/modules/zenny/execution/types.ts PositionRecord.
+// Bigints store millisecond timestamps (the same shape candles use).
+export const zennyPaperPositions = pgTable(
+  "zenny_paper_positions",
+  {
+    id: text("id").primaryKey(),
+    symbol: varchar("symbol", { length: 32 }).notNull(),
+    timeframe: varchar("timeframe", { length: 8 }).notNull(),
+    side: varchar("side", { length: 8 }).notNull(), // long | short
+
+    // TradePlan geometry (immutable after PLANNED)
+    entryPrice: numeric("entry_price", { precision: 20, scale: 8 }).notNull(),
+    stopPrice: numeric("stop_price", { precision: 20, scale: 8 }).notNull(),
+    targetPrice: numeric("target_price", { precision: 20, scale: 8 }).notNull(),
+    riskPct: numeric("risk_pct", { precision: 8, scale: 4 }).notNull(),
+    sizeMultiplier: numeric("size_multiplier", { precision: 8, scale: 4 }).notNull(),
+
+    // Sizing — set on PLANNED → LIVE
+    size: numeric("size", { precision: 24, scale: 8 }),
+    notional: numeric("notional", { precision: 24, scale: 8 }),
+
+    // Bar timestamps (ms since epoch)
+    emittedAtBarTs: numeric("emitted_at_bar_ts", { precision: 20, scale: 0 }).notNull(),
+    submittedAtBarTs: numeric("submitted_at_bar_ts", { precision: 20, scale: 0 }),
+    filledAtBarTs: numeric("filled_at_bar_ts", { precision: 20, scale: 0 }),
+    closedAtBarTs: numeric("closed_at_bar_ts", { precision: 20, scale: 0 }),
+
+    // Realised execution prices
+    fillPrice: numeric("fill_price", { precision: 20, scale: 8 }),
+    closePrice: numeric("close_price", { precision: 20, scale: 8 }),
+    realisedPnl: numeric("realised_pnl", { precision: 24, scale: 8 }),
+
+    // State + audit
+    status: varchar("status", { length: 16 }).notNull(),
+    exitReason: varchar("exit_reason", { length: 32 }),
+    rejectionReason: text("rejection_reason"),
+
+    lastEvaluatedAt: numeric("last_evaluated_at", { precision: 20, scale: 0 }).notNull(),
+
+    // Provenance from the decision module (for review later)
+    playbook: varchar("playbook", { length: 16 }),
+    anchorPoolId: text("anchor_pool_id"),
+    rationale: jsonb("rationale"),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("zenny_paper_pos_symbol_tf_status_idx").on(t.symbol, t.timeframe, t.status),
+    index("zenny_paper_pos_status_idx").on(t.status),
+  ],
+);
+
+// Single row per account-id. v0 hardcodes a single account "default";
+// multi-tenant lands later when the runner supports tenant fan-out.
+export const zennyPaperAccount = pgTable("zenny_paper_account", {
+  id: text("id").primaryKey(),
+  startingEquity: numeric("starting_equity", { precision: 24, scale: 8 }).notNull(),
+  currentEquity: numeric("current_equity", { precision: 24, scale: 8 }).notNull(),
+  peakEquity: numeric("peak_equity", { precision: 24, scale: 8 }).notNull(),
+  killStatus: varchar("kill_status", { length: 16 }).notNull().default("OK"),
+  drawdownPct: numeric("drawdown_pct", { precision: 8, scale: 4 }).notNull().default("0"),
+  killTrippedAt: timestamp("kill_tripped_at"),
+  manualUnhaltAt: timestamp("manual_unhalt_at"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// One row per cron tick — what was checked, what fired, errors. Lets us
+// debug "the system ran but didn't trade" later. Lightweight; high-volume
+// rows but cheap rows.
+export const zennyPaperTickLog = pgTable(
+  "zenny_paper_tick_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tickAt: timestamp("tick_at").notNull().defaultNow(),
+    symbol: varchar("symbol", { length: 32 }).notNull(),
+    timeframe: varchar("timeframe", { length: 8 }).notNull(),
+    summary: jsonb("summary").notNull(), // { hadOpenPosition, transition?, newPosition?, errors? }
+    error: text("error"),
+  },
+  (t) => [
+    index("zenny_paper_tick_at_idx").on(t.tickAt),
+  ],
+);
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -870,6 +963,12 @@ export type HyblockOhlc = typeof hyblockOhlc.$inferSelect;
 export type HyblockLiqLevel = typeof hyblockLiqLevels.$inferSelect;
 export type BinanceLiquidation = typeof binanceLiquidations.$inferSelect;
 export type InsertBinanceLiquidation = typeof binanceLiquidations.$inferInsert;
+export type ZennyPaperPosition = typeof zennyPaperPositions.$inferSelect;
+export type InsertZennyPaperPosition = typeof zennyPaperPositions.$inferInsert;
+export type ZennyPaperAccount = typeof zennyPaperAccount.$inferSelect;
+export type InsertZennyPaperAccount = typeof zennyPaperAccount.$inferInsert;
+export type ZennyPaperTickLog = typeof zennyPaperTickLog.$inferSelect;
+export type InsertZennyPaperTickLog = typeof zennyPaperTickLog.$inferInsert;
 
 export type Regime =
   | "no_trade"
