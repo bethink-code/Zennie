@@ -92,6 +92,10 @@ interface Props {
   // rendering. Default true; set to false in scoped views (REGIME/ORDERS/
   // TRADES) where levels would be noise. The LEVELS scope sets this true.
   showLevels?: boolean;
+  // Swing-candle markers — outlined rectangles around pivot candles. They
+  // diagnose "which candle birthed this level" but clutter the chart for
+  // operators who just want pools + level lines. Independent toggle.
+  showSwingMarkers?: boolean;
 }
 
 // Off-screen indicator cap — only show the N closest to the visible range
@@ -127,6 +131,7 @@ export function LeftFrameCanvas({
   strengthThreshold = 0,
   showRegimeStrip = false,
   showLevels = true,
+  showSwingMarkers = false,
 }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -360,6 +365,7 @@ export function LeftFrameCanvas({
               green = swing low. Only shown in candles mode: on the line
               chart they would pollute the alignment view. */}
           {showLevels &&
+            showSwingMarkers &&
             chartType === "candles" &&
             swingMarkerLevels.map((level) => (
               <SwingMarker

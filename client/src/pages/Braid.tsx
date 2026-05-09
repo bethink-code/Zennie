@@ -116,6 +116,7 @@ export default function Braid() {
   const [showPools, setShowPools] = usePersistedState("zenny.braid.showPools", true);
   const [showSweptPools, setShowSweptPools] = usePersistedState("zenny.braid.showSweptPools", false);
   const [showDeadPools, setShowDeadPools] = usePersistedState("zenny.braid.showDeadPools", false);
+  const [showSwingMarkers, setShowSwingMarkers] = usePersistedState("zenny.braid.showSwingMarkers", false);
   const [rightFrameCandleCount, setRightFrameCandleCount] = usePersistedState(
     "zenny.braid.rightFrameCandleCount",
     25,
@@ -363,6 +364,11 @@ export default function Braid() {
             checked={showLiqHeatmap}
             onChange={setShowLiqHeatmap}
           />
+          <ToggleSetting
+            label="Pivot marks"
+            checked={showSwingMarkers}
+            onChange={setShowSwingMarkers}
+          />
         </div>
         {showLiqHeatmap && (
           <label className="grid grid-cols-[88px_1fr] items-center gap-2 text-xs">
@@ -483,6 +489,7 @@ export default function Braid() {
                 showSweptPools={chartView.showSweptPools}
                 showDeadPools={chartView.showDeadPools}
                 showLevels={chartView.showLevels}
+                showSwingMarkers={showSwingMarkers}
                 showRegimeStrip={chartView.showRegimeStrip}
                 height={chartHeight}
                 strengthThreshold={
