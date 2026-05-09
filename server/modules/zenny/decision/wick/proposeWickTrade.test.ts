@@ -226,9 +226,10 @@ describe("proposeWickTrade — RANGING + swept RESISTANCE", () => {
     expect(plan!.rationale[0]).toMatch(/midpoint/);
   });
 
-  it("falls through to extreme when midpoint is the only swept option but pool not swept", () => {
-    // Trick: swap to a pool that's still active. Ranging matrix is
-    // [midpoint, extreme] but neither fade entry can fire on an active pool.
+  it("fade entries don't fire when pool is still active (matrix without anticipatory)", () => {
+    // Active pool means no sweep yet; midpoint and extreme both require
+    // a swept pool. Anticipatory removed from the test matrix so we
+    // verify only the fade-entry guard.
     const upper = pool({
       id: "u",
       type: "RESISTANCE",
@@ -250,6 +251,12 @@ describe("proposeWickTrade — RANGING + swept RESISTANCE", () => {
       arms: arms({ upper, dominantSide: "upper" }),
       pools: [upper],
       assessment: assessment("ranging"),
+      config: cfg({
+        regimeMatrix: {
+          ...DEFAULT_WICK_CONFIG.regimeMatrix,
+          ranging: ["midpoint", "extreme"], // exclude anticipatory for this test
+        },
+      }),
     });
     expect(plan).toBeNull();
   });
@@ -403,7 +410,11 @@ describe("proposeWickTrade — ANTICIPATORY", () => {
     expect(plan!.sizeMultiplier).toBe(0.5);
   });
 
-  it("anticipatory blocked when regime is not trending (default config)", () => {
+  it("anticipatory blocked by requireTrendingRegime when explicitly opted in", () => {
+    // Updated 2026-05-09: regimeMatrix is now the authoritative gate.
+    // requireTrendingRegime defaults to false (the matrix selects which
+    // regimes allow anticipatory). This test verifies the legacy
+    // requireTrendingRegime flag still works when explicitly set true.
     const upper = pool({
       id: "u",
       type: "RESISTANCE",
@@ -412,8 +423,6 @@ describe("proposeWickTrade — ANTICIPATORY", () => {
       wickLow: 100,
       status: "active",
     });
-    // Force regimeMatrix.ranging to ['anticipatory'] but anticipatory requires
-    // trending — should bail.
     const plan = proposeWickTrade({
       timeframe: TF,
       candles: candles({
@@ -430,6 +439,10 @@ describe("proposeWickTrade — ANTICIPATORY", () => {
         regimeMatrix: {
           ...DEFAULT_WICK_CONFIG.regimeMatrix,
           ranging: ["anticipatory"],
+        },
+        anticipatory: {
+          ...DEFAULT_WICK_CONFIG.anticipatory,
+          requireTrendingRegime: true, // explicit opt-in to legacy behavior
         },
       }),
     });

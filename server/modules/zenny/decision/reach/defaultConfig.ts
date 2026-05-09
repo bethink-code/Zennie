@@ -7,8 +7,10 @@
 import type { ReachTradeConfig } from "./types";
 
 export const DEFAULT_REACH_CONFIG: ReachTradeConfig = {
-  // R1
-  pullAsymmetryThreshold: 2.0,
+  // R1 — lowered 2.0 → 1.5 on 2026-05-09 after user observed setups
+  // with asymmetry ~1.47 being missed. Still operates WITHIN the regime
+  // gate; just relaxed the within-REACH threshold.
+  pullAsymmetryThreshold: 1.5,
   // R2
   entryMethod: "pullback-swing",
   pullbackLookbackBars: 5,

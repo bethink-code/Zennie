@@ -31,18 +31,26 @@ export const DEFAULT_WICK_CONFIG: WickTradeConfig = {
   },
 
   // W2 + W6 — anticipatory (#4)
+  // requireTrendingRegime relaxed 2026-05-09 — the regimeMatrix is now the
+  // authoritative gate for which regimes allow anticipatory. The internal
+  // requireTrendingRegime flag is now redundant; kept as belt-and-braces.
   anticipatory: {
     enabled: true, // ICT canon kept by default
     distanceRule: "fixed-buffer", // simplest v1 — refine to OTE later
     fixedBufferMultiple: 1.5,
     oteFraction: 0.705, // ICT Sweet Spot
-    requireTrendingRegime: true,
+    requireTrendingRegime: false,
   },
 
   // W3 — regime → entry style matrix
+  // Updated 2026-05-09: added 'anticipatory' to RANGING and ACCUMULATION
+  // per "optimise within the gate" principle (memory/zenny_regime_gate_principle.md).
+  // RANGING + ACCUMULATION already fire trades; we just added another entry
+  // style they can use. We did NOT add anticipatory to NO_TRADE — that
+  // would override the gate, not optimise within it.
   regimeMatrix: {
-    ranging: ["midpoint", "extreme"],
-    accumulation: ["midpoint"],
+    ranging: ["midpoint", "extreme", "anticipatory"],
+    accumulation: ["midpoint", "anticipatory"],
     trending: ["anticipatory"],
     breakout: ["extreme"],
   },

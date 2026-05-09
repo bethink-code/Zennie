@@ -4593,8 +4593,10 @@ function computeAsymmetry(arms) {
 
 // server/modules/zenny/decision/reach/defaultConfig.ts
 var DEFAULT_REACH_CONFIG = {
-  // R1
-  pullAsymmetryThreshold: 2,
+  // R1 — lowered 2.0 → 1.5 on 2026-05-09 after user observed setups
+  // with asymmetry ~1.47 being missed. Still operates WITHIN the regime
+  // gate; just relaxed the within-REACH threshold.
+  pullAsymmetryThreshold: 1.5,
   // R2
   entryMethod: "pullback-swing",
   pullbackLookbackBars: 5,
@@ -4855,6 +4857,9 @@ var DEFAULT_WICK_CONFIG = {
     // wider stop to absorb the second sweep
   },
   // W2 + W6 — anticipatory (#4)
+  // requireTrendingRegime relaxed 2026-05-09 — the regimeMatrix is now the
+  // authoritative gate for which regimes allow anticipatory. The internal
+  // requireTrendingRegime flag is now redundant; kept as belt-and-braces.
   anticipatory: {
     enabled: true,
     // ICT canon kept by default
@@ -4863,12 +4868,17 @@ var DEFAULT_WICK_CONFIG = {
     fixedBufferMultiple: 1.5,
     oteFraction: 0.705,
     // ICT Sweet Spot
-    requireTrendingRegime: true
+    requireTrendingRegime: false
   },
   // W3 — regime → entry style matrix
+  // Updated 2026-05-09: added 'anticipatory' to RANGING and ACCUMULATION
+  // per "optimise within the gate" principle (memory/zenny_regime_gate_principle.md).
+  // RANGING + ACCUMULATION already fire trades; we just added another entry
+  // style they can use. We did NOT add anticipatory to NO_TRADE — that
+  // would override the gate, not optimise within it.
   regimeMatrix: {
-    ranging: ["midpoint", "extreme"],
-    accumulation: ["midpoint"],
+    ranging: ["midpoint", "extreme", "anticipatory"],
+    accumulation: ["midpoint", "anticipatory"],
     trending: ["anticipatory"],
     breakout: ["extreme"]
   },
