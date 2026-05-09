@@ -18,6 +18,8 @@ import { RightFrameCanvas } from "@/components/braid/RightFrameCanvas";
 import { TradesColumnCollapsed, TradesColumnExpanded } from "@/components/braid/TradesColumn";
 import { LiqOverlay } from "@/components/braid/LiqOverlay";
 import { TradeOverlay } from "@/components/braid/TradeOverlay";
+import { ColumnInnerTabs } from "@/components/braid/ColumnInnerTabs";
+import { LevelsSettingsPanel } from "@/components/braid/LevelsSettingsPanel";
 import { PassPlayground } from "@/components/braid/PassPlayground";
 import type {
   AnalysisStateClient,
@@ -582,11 +584,21 @@ export default function Braid() {
                 />
               }
               expandedContent={
-                <NowBadgeExpanded
-                  result={data.passInfo?.wireAngle ?? null}
-                  assessment={data.regimeAssessment ?? null}
-                  primaryTf={data.primaryTimeframe}
-                  chartHeight={chartHeight}
+                <ColumnInnerTabs
+                  info={
+                    <NowBadgeExpanded
+                      result={data.passInfo?.wireAngle ?? null}
+                      assessment={data.regimeAssessment ?? null}
+                      primaryTf={data.primaryTimeframe}
+                      chartHeight={chartHeight}
+                    />
+                  }
+                  settings={
+                    <div className="text-xs text-[#888780] p-2">
+                      Regime tunables (wire-angle thresholds, per-playbook
+                      composite weights) — coming soon.
+                    </div>
+                  }
                 />
               }
             />
@@ -608,9 +620,31 @@ export default function Braid() {
                 />
               }
               expandedContent={
-                <LevelsColumnExpanded
-                  levels={data.levels}
-                  primaryTimeframe={timeframe}
+                <ColumnInnerTabs
+                  info={
+                    <LevelsColumnExpanded
+                      levels={data.levels}
+                      primaryTimeframe={timeframe}
+                    />
+                  }
+                  settings={
+                    <LevelsSettingsPanel
+                      showPools={showPools}
+                      setShowPools={setShowPools}
+                      showSweptPools={showSweptPools}
+                      setShowSweptPools={setShowSweptPools}
+                      showDeadPools={showDeadPools}
+                      setShowDeadPools={setShowDeadPools}
+                      showCurrentTf={showCurrentTf}
+                      setShowCurrentTf={setShowCurrentTf}
+                      showOtherTfs={showOtherTfs}
+                      setShowOtherTfs={setShowOtherTfs}
+                      showSwingMarkers={showSwingMarkers}
+                      setShowSwingMarkers={setShowSwingMarkers}
+                      maxLevelsPerSide={maxLevelsPerSide}
+                      setMaxLevelsPerSide={setMaxLevelsPerSide}
+                    />
+                  }
                 />
               }
             />
@@ -632,10 +666,28 @@ export default function Braid() {
                 />
               }
               expandedContent={
-                <OrdersStrategyColumnExpanded
-                  tradePlan={data.tradePlan}
-                  assessment={data.regimeAssessment}
-                  chartHeight={chartHeight}
+                <ColumnInnerTabs
+                  info={
+                    <OrdersStrategyColumnExpanded
+                      tradePlan={data.tradePlan}
+                      assessment={data.regimeAssessment}
+                      chartHeight={chartHeight}
+                    />
+                  }
+                  settings={
+                    <div className="text-xs text-[#888780] p-2 space-y-2">
+                      <div>
+                        Decision-module tunables (entry-style matrix, REACH
+                        asymmetry, slippage, kill-switch thresholds) — coming
+                        soon.
+                      </div>
+                      <div>
+                        Defaults are research-backed in code; see
+                        memory/zenny_paper_testing_schedule.md for the W1-W6,
+                        E1-E10, R1-R7 alternatives.
+                      </div>
+                    </div>
+                  }
                 />
               }
             />
@@ -646,7 +698,17 @@ export default function Braid() {
               chartHeight={chartHeight}
               markPriceY={markPriceY}
               collapsedContent={<TradesColumnCollapsed chartHeight={chartHeight} />}
-              expandedContent={<TradesColumnExpanded />}
+              expandedContent={
+                <ColumnInnerTabs
+                  info={<TradesColumnExpanded />}
+                  settings={
+                    <div className="text-xs text-[#888780] p-2">
+                      Paper-account settings (starting equity, kill-switch
+                      thresholds, max-bars-in-trade) — coming soon.
+                    </div>
+                  }
+                />
+              }
             />
             {/* TRADING — right-frame canvas with the two-wire braid.
                 Each panel has its own focused Y scale (NOT the left frame's
