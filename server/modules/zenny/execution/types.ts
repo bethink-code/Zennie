@@ -56,6 +56,10 @@ export interface PositionRecord {
   id: string;
   symbol: string;
   timeframe: Timeframe;
+  // Two-phase split: 'reach' = pull-target ride; 'take' = sweep-fade.
+  // Position dedup key is (symbol, timeframe, phase) — REACH and TAKE can
+  // coexist on the same TF.
+  phase: "reach" | "take";
   side: TradeSide;
 
   // Geometry copied from the TradePlan at PLANNED creation. Immutable.

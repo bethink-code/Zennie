@@ -275,7 +275,7 @@ export async function runAnalysis(
       regimeHistoryPerTimeframe: {},
       feedHealthPerTimeframe: {},
       tradePlan: null,
-      tradePlanResult: { primary: null, perTimeframe: {} },
+      tradePlanResult: { primary: null, perTimeframe: {}, plansPerTimeframe: {} },
       depth: null,
       orderFlow: null,
       computedAtMs: Date.now(),
@@ -612,7 +612,7 @@ export async function runAnalysis(
             perTimeframe: regimeAssessmentPerTimeframe,
           },
         })
-      : { primary: null, perTimeframe: {} };
+      : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
 
   // Top-level convenience fields — alias the primary TF's per-TF entries
   // so existing consumers (right-frame canvas, current strip render) keep

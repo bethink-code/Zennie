@@ -746,6 +746,9 @@ var zennyPaperPositions = pgTable(
     id: text("id").primaryKey(),
     symbol: varchar("symbol", { length: 32 }).notNull(),
     timeframe: varchar("timeframe", { length: 8 }).notNull(),
+    // Two-phase split: 'reach' or 'take'. Default 'take' for back-compat
+    // with rows created before the column existed.
+    phase: varchar("phase", { length: 8 }).notNull().default("take"),
     side: varchar("side", { length: 8 }).notNull(),
     // long | short
     // TradePlan geometry (immutable after PLANNED)
@@ -4542,6 +4545,175 @@ function pickRecommended2(playbooks) {
   return best;
 }
 
+// server/modules/zenny/decision/wick/computeATR.ts
+function computeATR(candles, period) {
+  if (period <= 0) return null;
+  if (candles.length < period + 1) return null;
+  const trs = [];
+  const start = candles.length - period;
+  for (let i = start; i < candles.length; i++) {
+    const cur = candles[i];
+    const prev = candles[i - 1];
+    const tr = Math.max(
+      cur.high - cur.low,
+      Math.abs(cur.high - prev.close),
+      Math.abs(cur.low - prev.close)
+    );
+    trs.push(tr);
+  }
+  let sum = 0;
+  for (const tr of trs) sum += tr;
+  return sum / trs.length;
+}
+
+// server/modules/zenny/decision/reach/computeAsymmetry.ts
+function computeAsymmetry(arms) {
+  if (arms.dominantSide === "neither") return null;
+  const upperPull = arms.upper?.pullDecayed ?? 0;
+  const lowerPull = arms.lower?.pullDecayed ?? 0;
+  if (arms.dominantSide === "upper") {
+    if (upperPull <= 0) return null;
+    const asymmetry2 = lowerPull <= 0 ? 999 : upperPull / lowerPull;
+    return {
+      asymmetry: asymmetry2,
+      dominantSide: "upper",
+      dominantPull: upperPull,
+      subordinatePull: lowerPull
+    };
+  }
+  if (lowerPull <= 0) return null;
+  const asymmetry = upperPull <= 0 ? 999 : lowerPull / upperPull;
+  return {
+    asymmetry,
+    dominantSide: "lower",
+    dominantPull: lowerPull,
+    subordinatePull: upperPull
+  };
+}
+
+// server/modules/zenny/decision/reach/defaultConfig.ts
+var DEFAULT_REACH_CONFIG = {
+  // R1
+  pullAsymmetryThreshold: 2,
+  // R2
+  entryMethod: "pullback-swing",
+  pullbackLookbackBars: 5,
+  // R3
+  stopAtrBufferMultiple: 0.25,
+  atrPeriod: 14,
+  // R4
+  tp1RatioOfPoolWidth: 0.2,
+  // Regime gating — direction must align (long REACH needs up direction)
+  requireDirectionAlignment: true,
+  // R5 — no time stop initially; matches TAKE convention E6
+  maxBarsInTrade: null,
+  // R6 — same R as TAKE per Van Tharp
+  sizeMultiplierVsTake: 1,
+  // R7
+  conflictZoneAtrMultiple: 1,
+  // Effort vs Result filter — disabled until volume normalisation lands
+  effortVsResultFilterEnabled: false
+};
+
+// server/modules/zenny/decision/reach/findRecentSwing.ts
+function findRecentSwingLow(candles, lookbackBars) {
+  if (candles.length === 0) return null;
+  const start = Math.max(0, candles.length - lookbackBars);
+  let lo = Infinity;
+  for (let i = start; i < candles.length; i++) {
+    if (candles[i].low < lo) lo = candles[i].low;
+  }
+  return Number.isFinite(lo) ? lo : null;
+}
+function findRecentSwingHigh(candles, lookbackBars) {
+  if (candles.length === 0) return null;
+  const start = Math.max(0, candles.length - lookbackBars);
+  let hi = -Infinity;
+  for (let i = start; i < candles.length; i++) {
+    if (candles[i].high > hi) hi = candles[i].high;
+  }
+  return Number.isFinite(hi) ? hi : null;
+}
+
+// server/modules/zenny/decision/reach/proposeReachTrade.ts
+function proposeReachTrade(input) {
+  const cfg = input.config ?? DEFAULT_REACH_CONFIG;
+  const asym = computeAsymmetry(input.arms);
+  if (asym === null) return null;
+  if (asym.asymmetry < cfg.pullAsymmetryThreshold) return null;
+  const dominantSide = asym.dominantSide;
+  const side = dominantSide === "upper" ? "long" : "short";
+  const dominantArm = dominantSide === "upper" ? input.arms.upper : input.arms.lower;
+  const oppositeArm = dominantSide === "upper" ? input.arms.lower : input.arms.upper;
+  if (!dominantArm) return null;
+  const dominantPool = dominantArm.pool;
+  if (cfg.requireDirectionAlignment) {
+    const angleInput = input.assessment.inputs.angle;
+    if (!angleInput.available || !angleInput.value) return null;
+    const direction = angleInput.value.direction;
+    if (side === "long" && direction !== "up") return null;
+    if (side === "short" && direction !== "down") return null;
+  }
+  const atr = computeATR(input.candles, cfg.atrPeriod);
+  if (atr === null) return null;
+  const distanceToPool = Math.abs(input.currentPrice - dominantPool.centreLine);
+  if (distanceToPool < atr * cfg.conflictZoneAtrMultiple) return null;
+  let entry = null;
+  if (cfg.entryMethod === "pullback-swing") {
+    entry = side === "long" ? findRecentSwingLow(input.candles, cfg.pullbackLookbackBars) : findRecentSwingHigh(input.candles, cfg.pullbackLookbackBars);
+  } else if (cfg.entryMethod === "at-market") {
+    entry = input.currentPrice;
+  }
+  if (entry === null) return null;
+  if (side === "long" && entry > input.currentPrice) entry = input.currentPrice;
+  if (side === "short" && entry < input.currentPrice) entry = input.currentPrice;
+  const buffer = atr * cfg.stopAtrBufferMultiple;
+  let stop;
+  let stopSource;
+  if (oppositeArm) {
+    stop = side === "long" ? oppositeArm.pool.wickLow - buffer : oppositeArm.pool.wickHigh + buffer;
+    stopSource = `opposite-arm wick + ${cfg.stopAtrBufferMultiple} \xD7 ATR`;
+  } else {
+    const dist = Math.abs(entry - dominantPool.centreLine);
+    stop = side === "long" ? entry - dist : entry + dist;
+    stopSource = "fallback (no opposite arm)";
+  }
+  const target = dominantPool.centreLine;
+  const poolWidth = Math.abs(
+    dominantPool.wickHigh - dominantPool.wickLow
+  );
+  const tp1Offset = poolWidth * cfg.tp1RatioOfPoolWidth;
+  const target2 = side === "long" ? target - tp1Offset : target + tp1Offset;
+  if (side === "long" && (stop >= entry || target <= entry)) return null;
+  if (side === "short" && (stop <= entry || target >= entry)) return null;
+  const riskAbs = Math.abs(entry - stop);
+  const rewardAbs = Math.abs(target - entry);
+  if (riskAbs === 0 || entry === 0) return null;
+  const playbook = input.assessment.recommended?.playbook ?? "trending";
+  return {
+    timeframe: input.timeframe,
+    playbook,
+    phase: "reach",
+    side,
+    entry,
+    stop,
+    target,
+    target2,
+    // TP1 — execution v0 doesn't honour, but persisted for UI
+    riskRewardRatio: rewardAbs / riskAbs,
+    riskPct: riskAbs / entry * 100,
+    sizeMultiplier: cfg.sizeMultiplierVsTake,
+    anchorPoolId: dominantPool.id,
+    rationale: [
+      `REACH ${side} \u2192 ${dominantSide} pool ${dominantPool.id}`,
+      `pull asymmetry ${asym.asymmetry.toFixed(2)} (threshold ${cfg.pullAsymmetryThreshold})`,
+      `entry: ${cfg.entryMethod}`,
+      `stop: ${stopSource}`,
+      `TP2 target: dominant pool centre; TP1 (target2) at ${cfg.tp1RatioOfPoolWidth.toFixed(2)}\xD7 pool width back`
+    ]
+  };
+}
+
 // server/modules/zenny/decision/wick/checkConfirmation.ts
 function checkConfirmation(input) {
   const { pool: pool2, candles, maxBarsAfterSweep } = input;
@@ -4569,27 +4741,6 @@ function checkConfirmation(input) {
     satisfied: false,
     reason: `no close-back-inside within ${maxBarsAfterSweep} bars`
   };
-}
-
-// server/modules/zenny/decision/wick/computeATR.ts
-function computeATR(candles, period) {
-  if (period <= 0) return null;
-  if (candles.length < period + 1) return null;
-  const trs = [];
-  const start = candles.length - period;
-  for (let i = start; i < candles.length; i++) {
-    const cur = candles[i];
-    const prev = candles[i - 1];
-    const tr = Math.max(
-      cur.high - cur.low,
-      Math.abs(cur.high - prev.close),
-      Math.abs(cur.low - prev.close)
-    );
-    trs.push(tr);
-  }
-  let sum = 0;
-  for (const tr of trs) sum += tr;
-  return sum / trs.length;
 }
 
 // server/modules/zenny/decision/wick/computeBuffer.ts
@@ -4820,6 +4971,7 @@ function tryStyle(args) {
   return {
     timeframe: input.timeframe,
     playbook,
+    phase: "take",
     side,
     entry,
     stop,
@@ -4844,8 +4996,9 @@ function pickDominantArm(arms) {
 // server/modules/zenny/decision/assembleTradePlans.ts
 function assembleTradePlans(input) {
   const perTimeframe = {};
+  const plansPerTimeframe = {};
   if (!input.regimeAssessment) {
-    return { primary: null, perTimeframe };
+    return { primary: null, perTimeframe, plansPerTimeframe };
   }
   for (const [tf, tfAssessment] of Object.entries(
     input.regimeAssessment.perTimeframe
@@ -4858,7 +5011,8 @@ function assembleTradePlans(input) {
     if (tfCandles.length === 0) continue;
     const currentPrice = tfCandles[tfCandles.length - 1].close;
     if (currentPrice <= 0) continue;
-    const plan = proposeWickTrade({
+    const tfPlans = [];
+    const takePlan = proposeWickTrade({
       timeframe: tf,
       candles: tfCandles,
       currentPrice,
@@ -4867,11 +5021,26 @@ function assembleTradePlans(input) {
       assessment: tfAssessment,
       config: input.wickConfig
     });
-    if (plan !== null) perTimeframe[tf] = plan;
+    if (takePlan !== null) tfPlans.push(takePlan);
+    const reachPlan = proposeReachTrade({
+      timeframe: tf,
+      candles: tfCandles,
+      currentPrice,
+      arms: tfArms,
+      pools: tfPools,
+      assessment: tfAssessment,
+      config: input.reachConfig
+    });
+    if (reachPlan !== null) tfPlans.push(reachPlan);
+    if (tfPlans.length > 0) {
+      plansPerTimeframe[tf] = tfPlans;
+      perTimeframe[tf] = tfPlans[0];
+    }
   }
   return {
     primary: perTimeframe[input.primaryTimeframe] ?? null,
-    perTimeframe
+    perTimeframe,
+    plansPerTimeframe
   };
 }
 
@@ -4927,7 +5096,7 @@ async function runAnalysis(input) {
       regimeHistoryPerTimeframe: {},
       feedHealthPerTimeframe: {},
       tradePlan: null,
-      tradePlanResult: { primary: null, perTimeframe: {} },
+      tradePlanResult: { primary: null, perTimeframe: {}, plansPerTimeframe: {} },
       depth: null,
       orderFlow: null,
       computedAtMs: Date.now()
@@ -5155,7 +5324,7 @@ async function runAnalysis(input) {
       primary: regimeAssessmentPerTimeframe[input.primaryTimeframe],
       perTimeframe: regimeAssessmentPerTimeframe
     }
-  }) : { primary: null, perTimeframe: {} };
+  }) : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
   const primaryArms = armsPerTimeframe[input.primaryTimeframe] ?? {
     upper: null,
     lower: null,
@@ -5260,6 +5429,7 @@ function createPosition(input) {
     id: input.id,
     symbol: input.symbol,
     timeframe: input.plan.timeframe,
+    phase: input.plan.phase,
     side: input.plan.side,
     entryPrice: input.plan.entry,
     stopPrice: input.plan.stop,
@@ -5601,6 +5771,7 @@ function toRow(p) {
     id: p.id,
     symbol: p.symbol,
     timeframe: p.timeframe,
+    phase: p.phase,
     side: p.side,
     entryPrice: String(p.entryPrice),
     stopPrice: String(p.stopPrice),
@@ -5628,6 +5799,7 @@ function fromRow(r) {
     id: r.id,
     symbol: r.symbol,
     timeframe: r.timeframe,
+    phase: r.phase ?? "take",
     side: r.side,
     entryPrice: Number(r.entryPrice),
     stopPrice: Number(r.stopPrice),
@@ -5833,18 +6005,34 @@ async function runPaperTradeTick(input) {
       account = applyPnl(account, after.realisedPnl);
     }
   }
-  const tradePlan = analysisState.tradePlan;
-  const stillOpen = (await loadOpenPositions(input.symbol, input.timeframe)).filter((p) => p.status === "PLANNED" || p.status === "LIVE" || p.status === "FILLED");
-  if (tradePlan !== null && stillOpen.length === 0 && account.killStatus === "OK") {
-    const pos = createPosition({
-      id: makePositionId(input.symbol, input.timeframe, latestClosedBar.openTime),
-      symbol: input.symbol,
-      plan: tradePlan,
-      emittedAtBarTs: latestClosedBar.openTime
-    });
-    await upsertPosition(pos);
-    newPositionId = pos.id;
-  } else if (tradePlan === null && stillOpen.length === 0) {
+  const tfPlans = analysisState.tradePlanResult.plansPerTimeframe?.[input.timeframe] ?? [];
+  const stillOpen = (await loadOpenPositions(input.symbol, input.timeframe)).filter(
+    (p) => p.status === "PLANNED" || p.status === "LIVE" || p.status === "FILLED"
+  );
+  const openPhases = new Set(stillOpen.map((p) => p.phase));
+  const newPositionIds = [];
+  if (account.killStatus === "OK") {
+    for (const plan of tfPlans) {
+      if (openPhases.has(plan.phase)) continue;
+      const pos = createPosition({
+        id: makePositionId(
+          input.symbol,
+          input.timeframe,
+          plan.phase,
+          latestClosedBar.openTime
+        ),
+        symbol: input.symbol,
+        plan,
+        emittedAtBarTs: latestClosedBar.openTime
+      });
+      await upsertPosition(pos);
+      newPositionIds.push(pos.id);
+      openPhases.add(plan.phase);
+    }
+  }
+  if (newPositionIds.length > 0) {
+    newPositionId = newPositionIds[0];
+  } else if (tfPlans.length === 0 && stillOpen.length === 0) {
     noTransitionReason = "no-trade-plan";
   } else if (account.killStatus === "SOFT_TRIPPED") {
     noTransitionReason = "kill-switch-soft-tripped";
@@ -5917,8 +6105,8 @@ function pickLatestClosedBar(candles, now) {
   }
   return null;
 }
-function makePositionId(symbol, timeframe, bar) {
-  return `${symbol}-${timeframe}-${bar}`;
+function makePositionId(symbol, timeframe, phase, bar) {
+  return `${symbol}-${timeframe}-${phase}-${bar}`;
 }
 
 // server/routes/zennyRoutes.ts
@@ -5985,7 +6173,21 @@ function registerZennyRoutes(app2) {
           passConfig,
           liquidations
         });
-        res.json(state);
+        let paperPositions = [];
+        let paperOpenPositions = [];
+        try {
+          [paperPositions, paperOpenPositions] = await Promise.all([
+            listPositions(symbol, timeframe, 200),
+            loadOpenPositions(symbol, timeframe)
+          ]);
+        } catch (err) {
+          console.error("[zenny] paper positions fetch failed", err);
+        }
+        res.json({
+          ...state,
+          paperPositions,
+          paperOpenPositions
+        });
       } catch (err) {
         console.error("[zenny] braid-view-model failed", err);
         res.status(500).json({

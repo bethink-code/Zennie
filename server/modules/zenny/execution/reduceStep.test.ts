@@ -17,6 +17,7 @@ function plan(opts: {
   return {
     timeframe: "1H",
     playbook: "ranging",
+    phase: "take",
     side: opts.side ?? "long",
     entry: opts.entry,
     stop: opts.stop,

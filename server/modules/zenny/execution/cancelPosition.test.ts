@@ -6,6 +6,7 @@ import type { TradePlan } from "../decision/types";
 const PLAN: TradePlan = {
   timeframe: "1H",
   playbook: "ranging",
+  phase: "take",
   side: "long",
   entry: 100,
   stop: 95,

@@ -15,6 +15,7 @@ import { runPaperTradeTick } from "../modules/zenny/runner/runPaperTradeTick";
 import {
   listPositions,
   loadAccount,
+  loadOpenPositions,
 } from "../modules/zenny/persistence/paperTradeStore";
 
 // Pairs to tick on each cron run. Keep small in v0; extend later.
@@ -104,7 +105,26 @@ export function registerZennyRoutes(app: Express) {
           liquidations,
         });
 
-        res.json(state);
+        // Attach paper-trading state for the chart overlay. Failure here is
+        // non-fatal — the chart still renders, just without trade markers.
+        let paperPositions: Awaited<ReturnType<typeof listPositions>> = [];
+        let paperOpenPositions: Awaited<
+          ReturnType<typeof loadOpenPositions>
+        > = [];
+        try {
+          [paperPositions, paperOpenPositions] = await Promise.all([
+            listPositions(symbol, timeframe, 200),
+            loadOpenPositions(symbol, timeframe),
+          ]);
+        } catch (err) {
+          console.error("[zenny] paper positions fetch failed", err);
+        }
+
+        res.json({
+          ...state,
+          paperPositions,
+          paperOpenPositions,
+        });
       } catch (err) {
         console.error("[zenny] braid-view-model failed", err);
         res.status(500).json({

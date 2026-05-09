@@ -17,6 +17,7 @@ import {
 import { RightFrameCanvas } from "@/components/braid/RightFrameCanvas";
 import { TradesColumnCollapsed, TradesColumnExpanded } from "@/components/braid/TradesColumn";
 import { LiqOverlay } from "@/components/braid/LiqOverlay";
+import { TradeOverlay } from "@/components/braid/TradeOverlay";
 import { PassPlayground } from "@/components/braid/PassPlayground";
 import type {
   AnalysisStateClient,
@@ -506,6 +507,23 @@ export default function Braid() {
                   onClose={() => setLiqOverlayOpen(false)}
                 />
               )}
+              {/* Trade overlay — probable TradePlans + actual paper positions.
+                  Always on (trades are the point of the system). */}
+              <TradeOverlay
+                candles={data.candles}
+                plans={
+                  data.tradePlanResult?.plansPerTimeframe?.[
+                    data.primaryTimeframe
+                  ] ?? []
+                }
+                positions={data.paperPositions ?? []}
+                priceMin={priceMin}
+                priceMax={priceMax}
+                padLeft={CHART_PAD.l}
+                padRight={CHART_PAD.r}
+                padTop={CHART_PAD.t}
+                padBottom={CHART_PAD.b}
+              />
               {/* Decay slider — pinned bottom-left when overlay is open */}
               {showLiqHeatmap && liqOverlayOpen && (
                 <div className="absolute bottom-2 left-16 flex items-center gap-2 bg-white/90 rounded px-3 py-1 border border-black/10 z-20">

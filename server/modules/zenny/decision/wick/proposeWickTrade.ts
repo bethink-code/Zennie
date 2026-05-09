@@ -173,6 +173,7 @@ function tryStyle(args: TryStyleArgs): TradePlan | null {
   return {
     timeframe: input.timeframe,
     playbook,
+    phase: "take",
     side,
     entry,
     stop,

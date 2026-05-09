@@ -856,6 +856,9 @@ export const zennyPaperPositions = pgTable(
     id: text("id").primaryKey(),
     symbol: varchar("symbol", { length: 32 }).notNull(),
     timeframe: varchar("timeframe", { length: 8 }).notNull(),
+    // Two-phase split: 'reach' or 'take'. Default 'take' for back-compat
+    // with rows created before the column existed.
+    phase: varchar("phase", { length: 8 }).notNull().default("take"),
     side: varchar("side", { length: 8 }).notNull(), // long | short
 
     // TradePlan geometry (immutable after PLANNED)

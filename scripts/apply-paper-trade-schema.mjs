@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS zenny_paper_positions (
   id text PRIMARY KEY,
   symbol varchar(32) NOT NULL,
   timeframe varchar(8) NOT NULL,
+  phase varchar(8) NOT NULL DEFAULT 'take',
   side varchar(8) NOT NULL,
   entry_price numeric(20, 8) NOT NULL,
   stop_price numeric(20, 8) NOT NULL,
@@ -61,6 +62,10 @@ CREATE INDEX IF NOT EXISTS zenny_paper_pos_symbol_tf_status_idx
 
 CREATE INDEX IF NOT EXISTS zenny_paper_pos_status_idx
   ON zenny_paper_positions USING btree (status);
+
+-- Idempotent column add for previously-deployed instances
+ALTER TABLE zenny_paper_positions
+  ADD COLUMN IF NOT EXISTS phase varchar(8) NOT NULL DEFAULT 'take';
 
 CREATE TABLE IF NOT EXISTS zenny_paper_account (
   id text PRIMARY KEY,

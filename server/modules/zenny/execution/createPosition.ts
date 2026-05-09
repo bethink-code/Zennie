@@ -24,6 +24,7 @@ export function createPosition(
     id: input.id,
     symbol: input.symbol,
     timeframe: input.plan.timeframe,
+    phase: input.plan.phase,
     side: input.plan.side,
     entryPrice: input.plan.entry,
     stopPrice: input.plan.stop,

@@ -177,25 +177,42 @@ export async function runPaperTradeTick(
     }
   }
 
-  // Soft-kill blocks NEW entries; existing trades already ran above.
-  const tradePlan = analysisState.tradePlan;
-  const stillOpen = (await loadOpenPositions(input.symbol, input.timeframe))
-    .filter((p) => p.status === "PLANNED" || p.status === "LIVE" || p.status === "FILLED");
+  // Multi-plan handling — REACH and TAKE can both fire on the same TF.
+  // Dedup by (symbol, tf, phase): if there's already an open position for a
+  // phase, skip creating another one. Soft-kill blocks NEW entries.
+  const tfPlans =
+    analysisState.tradePlanResult.plansPerTimeframe?.[input.timeframe] ?? [];
+  const stillOpen = (
+    await loadOpenPositions(input.symbol, input.timeframe)
+  ).filter(
+    (p) =>
+      p.status === "PLANNED" || p.status === "LIVE" || p.status === "FILLED",
+  );
+  const openPhases = new Set(stillOpen.map((p) => p.phase));
+  const newPositionIds: string[] = [];
 
-  if (
-    tradePlan !== null &&
-    stillOpen.length === 0 &&
-    account.killStatus === "OK"
-  ) {
-    const pos = createPosition({
-      id: makePositionId(input.symbol, input.timeframe, latestClosedBar.openTime),
-      symbol: input.symbol,
-      plan: tradePlan,
-      emittedAtBarTs: latestClosedBar.openTime,
-    });
-    await upsertPosition(pos);
-    newPositionId = pos.id;
-  } else if (tradePlan === null && stillOpen.length === 0) {
+  if (account.killStatus === "OK") {
+    for (const plan of tfPlans) {
+      if (openPhases.has(plan.phase)) continue; // dedup
+      const pos = createPosition({
+        id: makePositionId(
+          input.symbol,
+          input.timeframe,
+          plan.phase,
+          latestClosedBar.openTime,
+        ),
+        symbol: input.symbol,
+        plan,
+        emittedAtBarTs: latestClosedBar.openTime,
+      });
+      await upsertPosition(pos);
+      newPositionIds.push(pos.id);
+      openPhases.add(plan.phase);
+    }
+  }
+  if (newPositionIds.length > 0) {
+    newPositionId = newPositionIds[0]; // backward-compat — first new id
+  } else if (tfPlans.length === 0 && stillOpen.length === 0) {
     noTransitionReason = "no-trade-plan";
   } else if (account.killStatus === "SOFT_TRIPPED") {
     noTransitionReason = "kill-switch-soft-tripped";
@@ -289,7 +306,8 @@ function pickLatestClosedBar(
 function makePositionId(
   symbol: string,
   timeframe: Timeframe,
+  phase: string,
   bar: number,
 ): string {
-  return `${symbol}-${timeframe}-${bar}`;
+  return `${symbol}-${timeframe}-${phase}-${bar}`;
 }

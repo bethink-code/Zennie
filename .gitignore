@@ -10,3 +10,5 @@ dist-server
 .idea
 drizzle/meta
 .claude/settings.local.json
+
+.vercel

@@ -27,15 +27,27 @@ import type { AnalysisPool } from "../analysis/orchestrator";
 
 export type TradeSide = "long" | "short";
 
+// Two-phase strategic split (see memory/zenny_two_phase_strategy.md).
+// 'reach' = ride toward a high-pull pool; 'take' = fade after the wick sweeps it.
+// Both can co-exist on the same TF / symbol — they're independent setups.
+export type TradePhase = "reach" | "take";
+
 export interface TradePlan {
   timeframe: Timeframe;
   playbook: Playbook;
+  // Phase tells the runner / UI which playbook family produced this plan.
+  // Used as part of the position-dedup key (one open position per
+  // (symbol, tf, phase)).
+  phase: TradePhase;
   side: TradeSide;
   // Geometry — all in price units. Entry/stop/target derived from arms
   // + pools per the playbook's specific logic.
   entry: number;
   stop: number;
   target: number;
+  // Optional second take-profit target. REACH plans set this for the
+  // two-stage TP1/TP2 convention; TAKE plans leave it null.
+  target2?: number | null;
   // Derived metrics — pre-computed for the trading module / UI so they
   // don't need to redo the arithmetic.
   riskRewardRatio: number; // |target-entry| / |entry-stop|
@@ -66,8 +78,13 @@ export interface ProposalContext {
 
 // Output shape from the top-level assembler.
 export interface TradePlanResult {
-  // Convenience pointer to the primary TF's plan, mirroring how
-  // arms / regimeAssessment / regimeHistory are structured.
+  // Convenience pointer to the primary TF's first non-null plan (preserves
+  // backward compat with single-plan UI consumers).
   primary: TradePlan | null;
+  // Backward-compat: first plan per TF.
   perTimeframe: Partial<Record<Timeframe, TradePlan>>;
+  // Multi-plan field — REACH and TAKE can both fire on the same TF, both
+  // get persisted as separate positions. UI iterates this for the trade
+  // overlay.
+  plansPerTimeframe: Partial<Record<Timeframe, TradePlan[]>>;
 }

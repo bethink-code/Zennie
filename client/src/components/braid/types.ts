@@ -464,14 +464,17 @@ export interface RegimeAssessmentResultClient {
 // these and turns them into orders.
 
 export type TradeSideClient = "long" | "short";
+export type TradePhaseClient = "reach" | "take";
 
 export interface TradePlanClient {
   timeframe: Timeframe;
   playbook: PlaybookClient;
+  phase: TradePhaseClient;
   side: TradeSideClient;
   entry: number;
   stop: number;
   target: number;
+  target2?: number | null;
   riskRewardRatio: number;
   riskPct: number;
   sizeMultiplier: number;
@@ -482,6 +485,43 @@ export interface TradePlanClient {
 export interface TradePlanResultClient {
   primary: TradePlanClient | null;
   perTimeframe: Partial<Record<Timeframe, TradePlanClient>>;
+  plansPerTimeframe: Partial<Record<Timeframe, TradePlanClient[]>>;
+}
+
+// === Paper trading positions (server PositionRecord mirrored to client) =====
+export type PositionStatusClient =
+  | "PLANNED"
+  | "LIVE"
+  | "FILLED"
+  | "CLOSED"
+  | "CANCELLED"
+  | "EXPIRED"
+  | "REJECTED";
+
+export interface PaperPositionClient {
+  id: string;
+  symbol: string;
+  timeframe: Timeframe;
+  phase: TradePhaseClient;
+  side: TradeSideClient;
+  entryPrice: number;
+  stopPrice: number;
+  targetPrice: number;
+  riskPct: number;
+  sizeMultiplier: number;
+  size: number | null;
+  notional: number | null;
+  emittedAtBarTs: number;
+  submittedAtBarTs: number | null;
+  filledAtBarTs: number | null;
+  closedAtBarTs: number | null;
+  fillPrice: number | null;
+  closePrice: number | null;
+  realisedPnl: number | null;
+  status: PositionStatusClient;
+  exitReason: string | null;
+  rejectionReason: string | null;
+  lastEvaluatedAt: number;
 }
 
 // One row per primary candle that has wire-angle data. Drives the
@@ -538,6 +578,11 @@ export interface AnalysisStateClient {
   // Decision module output — concrete TradePlan per TF.
   tradePlan: TradePlanClient | null;
   tradePlanResult: TradePlanResultClient;
+  // Paper trading state — full position list (open + closed) and a
+  // convenience filter of just the open ones. Server route attaches these
+  // alongside the analysis state. Empty arrays when DB fetch fails.
+  paperPositions?: PaperPositionClient[];
+  paperOpenPositions?: PaperPositionClient[];
   depth: DepthSnapshotClient | null;
   orderFlow: OrderFlowSnapshotClient | null;
   computedAtMs: number;
