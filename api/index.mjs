@@ -6011,7 +6011,18 @@ function registerZennyRoutes(app2) {
   );
   app2.post(
     "/api/zenny/paper-trade-tick",
-    async (_req, res) => {
+    async (req, res) => {
+      const auth = req.headers.authorization ?? "";
+      const expected = process.env.CRON_SECRET;
+      if (!expected) {
+        return res.status(503).json({
+          error: "cron_secret_not_configured",
+          hint: "Set CRON_SECRET in Vercel env vars."
+        });
+      }
+      if (auth !== `Bearer ${expected}`) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
       try {
         const provider = getProvider();
         const results = [];

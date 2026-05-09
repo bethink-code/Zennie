@@ -2,6 +2,7 @@
   "version": 2,
   "buildCommand": "npm run build && npm run build:api",
   "outputDirectory": "dist",
+  "regions": ["fra1"],
   "functions": {
     "api/index.mjs": {
       "maxDuration": 60
@@ -15,7 +16,7 @@
   "crons": [
     {
       "path": "/api/zenny/paper-trade-tick",
-      "schedule": "0 0 * * *"
+      "schedule": "*/15 * * * *"
     }
   ]
 }
