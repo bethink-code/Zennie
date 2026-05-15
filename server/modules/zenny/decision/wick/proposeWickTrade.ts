@@ -121,12 +121,17 @@ function tryStyle(args: TryStyleArgs): TradePlan | null {
   }
 
   // Geometry.
-  const entry = computeEntry({
-    pool,
-    style,
-    buffer,
-    anticipatory: cfg.anticipatory,
-  });
+  const useCurrentPriceEntry =
+    style === "anticipatory" &&
+    cfg.anticipatory.currentPricePlaybooks.includes(playbook);
+  const entry = useCurrentPriceEntry
+    ? input.currentPrice
+    : computeEntry({
+        pool,
+        style,
+        buffer,
+        anticipatory: cfg.anticipatory,
+      });
   if (entry === null) return null;
   const stop = computeStop({ pool, style, buffer, beyond: cfg.beyond });
   const targetOut = computeTarget({ pool, arms: input.arms, entry, side });
@@ -169,7 +174,9 @@ function tryStyle(args: TryStyleArgs): TradePlan | null {
     );
   }
   if (style === "anticipatory") {
-    rationale.push(`distance rule: ${cfg.anticipatory.distanceRule}`);
+    rationale.push(
+      `distance rule: ${useCurrentPriceEntry ? "current-price" : cfg.anticipatory.distanceRule}`,
+    );
   }
 
   return {

@@ -68,6 +68,10 @@ export interface AnticipatoryConfig {
   distanceRule: AnticipatoryDistanceRule;
   fixedBufferMultiple: number; // 1.5 = entry at wick - 1.5×buffer
   oteFraction: number; // 0.705 = ICT Sweet Spot
+  // Some regimes want the obvious trade now, not a wishful retrace. When a
+  // playbook is listed here, anticipatory uses the current decision price
+  // rather than parking a lower long / higher short.
+  currentPricePlaybooks: Playbook[];
   // Anticipatory is ICT-only by canon. Restrict to TRENDING regime by default;
   // can be relaxed when paper-trading shows it works elsewhere.
   requireTrendingRegime: boolean;

@@ -433,8 +433,49 @@ describe("proposeWickTrade — ANTICIPATORY", () => {
     expect(plan!.side).toBe("short");
     // Entry is below wickHigh by 1.5 × buffer (default fixed-buffer rule).
     // buffer = 0.2% × 95 = 0.19; offset = 1.5 × 0.19 = 0.285.
-    expect(plan!.entry).toBeCloseTo(106 - 0.285, 2);
+    expect(plan!.entry).toBe(95);
     expect(plan!.sizeMultiplier).toBe(0.5);
+    expect(plan!.rationale).toContain("distance rule: current-price");
+  });
+
+  it("anticipatory entry in RANGING still uses the deeper entry", () => {
+    const lower = pool({
+      id: "l",
+      type: "SUPPORT",
+      linePrice: 100,
+      wickHigh: 100,
+      wickLow: 94,
+      status: "active",
+    });
+    const upper = pool({
+      id: "u",
+      type: "RESISTANCE",
+      linePrice: 110,
+      wickHigh: 114,
+      wickLow: 110,
+    });
+    const plan = proposeWickTrade({
+      timeframe: TF,
+      candles: candles({
+        lengthBeforeSweep: 5,
+        sweepCandleClose: 101,
+        postSweepCloses: [],
+        basePrice: 101,
+      }),
+      currentPrice: 101,
+      arms: arms({ upper, lower, dominantSide: "lower" }),
+      pools: [upper, lower],
+      assessment: assessment("ranging"),
+      config: cfg({
+        regimeMatrix: {
+          ...DEFAULT_WICK_CONFIG.regimeMatrix,
+          ranging: ["anticipatory"],
+        },
+      }),
+    });
+    expect(plan).not.toBeNull();
+    // buffer = 0.2% × 101 = 0.202; offset = 1.5 × 0.202 = 0.303
+    expect(plan!.entry).toBeCloseTo(94 + 0.303, 2);
   });
 
   it("anticipatory blocked by requireTrendingRegime when explicitly opted in", () => {

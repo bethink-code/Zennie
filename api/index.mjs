@@ -4711,6 +4711,7 @@ var DEFAULT_WICK_CONFIG = {
     fixedBufferMultiple: 1.5,
     oteFraction: 0.705,
     // ICT Sweet Spot
+    currentPricePlaybooks: ["trending"],
     requireTrendingRegime: false
   },
   // W3 — regime → entry style matrix
@@ -4782,7 +4783,8 @@ function tryStyle(args) {
       return null;
     }
   }
-  const entry = computeEntry({
+  const useCurrentPriceEntry = style === "anticipatory" && cfg.anticipatory.currentPricePlaybooks.includes(playbook);
+  const entry = useCurrentPriceEntry ? input.currentPrice : computeEntry({
     pool: pool2,
     style,
     buffer,
@@ -4822,7 +4824,9 @@ function tryStyle(args) {
     );
   }
   if (style === "anticipatory") {
-    rationale.push(`distance rule: ${cfg.anticipatory.distanceRule}`);
+    rationale.push(
+      `distance rule: ${useCurrentPriceEntry ? "current-price" : cfg.anticipatory.distanceRule}`
+    );
   }
   return {
     timeframe: input.timeframe,
