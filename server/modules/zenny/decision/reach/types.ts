@@ -20,6 +20,9 @@ export interface ReachTradeConfig {
   // REACH is a continuation idea. Keep it out of regimes where the cleaner
   // behavior is to fade the edges instead of chasing the middle.
   allowedPlaybooks: Playbook[];
+  // In continuation regimes we sometimes want the obvious trade now, not a
+  // parked retrace order that may never get touched.
+  currentPricePlaybooks: Playbook[];
 
   // R1 — pull asymmetry threshold. dominant/subordinate must exceed this for
   // a REACH to fire. Default 2.0 (no published anchor; closest is Dalton's

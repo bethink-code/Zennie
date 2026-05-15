@@ -79,9 +79,14 @@ export function proposeReachTrade(
   const distanceToPool = Math.abs(input.currentPrice - dominantPool.centreLine);
   if (distanceToPool < atr * cfg.conflictZoneAtrMultiple) return null;
 
-  // Entry: pullback-swing (v0 only mode).
+  const useCurrentPriceEntry = cfg.currentPricePlaybooks.includes(playbook);
+
+  // Entry: either take the current decision price for continuation regimes,
+  // or fall back to the older pullback entry styles when explicitly allowed.
   let entry: number | null = null;
-  if (cfg.entryMethod === "pullback-swing") {
+  if (useCurrentPriceEntry) {
+    entry = input.currentPrice;
+  } else if (cfg.entryMethod === "pullback-swing") {
     entry =
       side === "long"
         ? findRecentSwingLow(input.candles, cfg.pullbackLookbackBars)
@@ -155,7 +160,7 @@ export function proposeReachTrade(
     rationale: [
       `REACH ${side} → ${dominantSide} pool ${dominantPool.id}`,
       `pull asymmetry ${asym.asymmetry.toFixed(2)} (threshold ${cfg.pullAsymmetryThreshold})`,
-      `entry: ${cfg.entryMethod}`,
+      `entry: ${useCurrentPriceEntry ? "current-price" : cfg.entryMethod}`,
       `stop: ${stopSource}`,
       `TP2 target: dominant pool centre; TP1 (target2) at ${cfg.tp1RatioOfPoolWidth.toFixed(2)}× pool width back`,
     ],

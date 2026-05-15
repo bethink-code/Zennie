@@ -166,8 +166,10 @@ describe("proposeReachTrade — happy paths", () => {
     expect(plan).not.toBeNull();
     expect(plan!.phase).toBe("reach");
     expect(plan!.side).toBe("long");
+    expect(plan!.entry).toBe(100);
     expect(plan!.target).toBe(upperP.centreLine); // pool centre
     expect(plan!.anchorPoolId).toBe("u");
+    expect(plan!.rationale).toContain("entry: current-price");
     // Stop should be below entry (long), past lower wick - buffer.
     expect(plan!.stop).toBeLessThan(plan!.entry);
     expect(plan!.stop).toBeLessThanOrEqual(lowerP.wickLow);
@@ -206,8 +208,10 @@ describe("proposeReachTrade — happy paths", () => {
     });
     expect(plan).not.toBeNull();
     expect(plan!.side).toBe("short");
+    expect(plan!.entry).toBe(100);
     expect(plan!.target).toBe(lowerP.centreLine);
     expect(plan!.stop).toBeGreaterThan(plan!.entry);
+    expect(plan!.rationale).toContain("entry: current-price");
   });
 });
 
@@ -325,6 +329,40 @@ describe("proposeReachTrade — playbook gating", () => {
 });
 
 describe("proposeReachTrade — config knobs", () => {
+  it("currentPricePlaybooks=[] falls back to pullback entry logic", () => {
+    const upperP = pool({
+      id: "u",
+      type: "RESISTANCE",
+      linePrice: 110,
+      wickHigh: 115,
+      wickLow: 108,
+    });
+    const lowerP = pool({
+      id: "l",
+      type: "SUPPORT",
+      linePrice: 95,
+      wickHigh: 96,
+      wickLow: 92,
+    });
+    const candles = trCandles(20, 100, 2);
+    const plan = proposeReachTrade({
+      timeframe: TF,
+      candles,
+      currentPrice: 100,
+      arms: arms({
+        upper: { pool: upperP, pull: 100 },
+        lower: { pool: lowerP, pull: 30 },
+        dominant: "upper",
+      }),
+      pools: [upperP, lowerP],
+      assessment: assessment("up"),
+      config: cfg({ currentPricePlaybooks: [] }),
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.entry).toBe(99);
+    expect(plan!.rationale).toContain("entry: pullback-swing");
+  });
+
   it("requireDirectionAlignment=false skips angle check", () => {
     const upperP = pool({
       id: "u",
