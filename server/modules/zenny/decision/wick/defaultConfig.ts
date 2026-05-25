@@ -39,7 +39,6 @@ export const DEFAULT_WICK_CONFIG: WickTradeConfig = {
     distanceRule: "fixed-buffer", // simplest v1 — refine to OTE later
     fixedBufferMultiple: 1.5,
     oteFraction: 0.705, // ICT Sweet Spot
-    currentPricePlaybooks: ["trending"],
     requireTrendingRegime: false,
   },
 

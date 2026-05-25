@@ -433,9 +433,8 @@ describe("proposeWickTrade — ANTICIPATORY", () => {
     expect(plan!.side).toBe("short");
     // Entry is below wickHigh by 1.5 × buffer (default fixed-buffer rule).
     // buffer = 0.2% × 95 = 0.19; offset = 1.5 × 0.19 = 0.285.
-    expect(plan!.entry).toBe(95);
+    expect(plan!.entry).toBeCloseTo(106 - 0.285, 2);
     expect(plan!.sizeMultiplier).toBe(0.5);
-    expect(plan!.rationale).toContain("distance rule: current-price");
   });
 
   it("anticipatory entry in RANGING still uses the deeper entry", () => {
