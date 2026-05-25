@@ -6,7 +6,7 @@
 
 import { BinanceProvider } from "../server/modules/zenny/infrastructure/providers/binanceProvider";
 import { DEFAULT_INFRASTRUCTURE_CONFIG } from "../server/modules/zenny/infrastructure/types";
-import { runPaperTradeTick } from "../server/modules/zenny/runner/runPaperTradeTick";
+import { runPaperTradeWatchlistTick } from "../server/modules/zenny/runner/watchlist";
 
 async function main() {
   if (!process.env.DATABASE_URL) {
@@ -16,13 +16,10 @@ async function main() {
 
   const provider = new BinanceProvider(DEFAULT_INFRASTRUCTURE_CONFIG);
 
-  const result = await runPaperTradeTick({
-    provider,
-    symbol: "BTCUSDT",
-    timeframe: "1H",
-  });
+  // Exactly what the Vercel cron runs — the whole watchlist.
+  const results = await runPaperTradeWatchlistTick(provider);
 
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(results, null, 2));
   process.exit(0);
 }
 

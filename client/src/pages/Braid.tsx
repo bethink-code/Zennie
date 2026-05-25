@@ -44,6 +44,7 @@ import {
   DEFAULT_PASS_CONFIG,
   getDefaultBraidCountForTimeframe,
 } from "@shared/zennyBraidDefaults";
+import { WATCHLIST_SYMBOLS, normaliseSymbol } from "@shared/zennyWatchlist";
 
 const LEGACY_DEFAULT_PASS_CONFIG: PassConfigClient = {
   recency: {
@@ -527,10 +528,21 @@ export default function Braid() {
           <h1 className="text-base font-medium">Zenny Braid</h1>
           <input
             value={symbol}
+            list="zenny-watchlist-symbols"
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            className="border border-black/15 rounded px-2 py-0.5 w-24 bg-white text-sm"
+            onBlur={(e) => setSymbol(normaliseSymbol(e.target.value))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") setSymbol(normaliseSymbol(e.currentTarget.value));
+            }}
+            className="border border-black/15 rounded px-2 py-0.5 w-28 bg-white text-sm"
             aria-label="Trading pair"
+            placeholder="SOL → SOLUSDT"
           />
+          <datalist id="zenny-watchlist-symbols">
+            {WATCHLIST_SYMBOLS.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
           <select
             value={timeframe}
             onChange={(e) => setTimeframe(e.target.value as Timeframe)}

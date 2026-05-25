@@ -2857,8 +2857,9 @@ function makeLiquidityPoolPassConfig(profile) {
       weightLastLeg: 0.45,
       weightTouchCount: 0.3,
       brokenPenalty: 0.15,
-      // Reset/default is a recovery view: score everything, hide nothing.
-      strengthThreshold: 0
+      // Default hides the weakest levels so the chart loads clean rather than
+      // cluttered. Drag the Pass Playground slider to 0 to see everything.
+      strengthThreshold: 0.5
     },
     // N=14 stays constant across TFs (matches RSI/ADX/Wilder convention).
     // The TF-invariance comes from volatility normalisation in the slope
@@ -4711,7 +4712,6 @@ var DEFAULT_WICK_CONFIG = {
     fixedBufferMultiple: 1.5,
     oteFraction: 0.705,
     // ICT Sweet Spot
-    currentPricePlaybooks: ["trending"],
     requireTrendingRegime: false
   },
   // W3 — regime → entry style matrix
@@ -4783,8 +4783,7 @@ function tryStyle(args) {
       return null;
     }
   }
-  const useCurrentPriceEntry = style === "anticipatory" && cfg.anticipatory.currentPricePlaybooks.includes(playbook);
-  const entry = useCurrentPriceEntry ? input.currentPrice : computeEntry({
+  const entry = computeEntry({
     pool: pool2,
     style,
     buffer,
@@ -4824,9 +4823,7 @@ function tryStyle(args) {
     );
   }
   if (style === "anticipatory") {
-    rationale.push(
-      `distance rule: ${useCurrentPriceEntry ? "current-price" : cfg.anticipatory.distanceRule}`
-    );
+    rationale.push(`distance rule: ${cfg.anticipatory.distanceRule}`);
   }
   return {
     timeframe: input.timeframe,
@@ -5284,6 +5281,18 @@ async function fetchRecentLiquidations(opts) {
   }));
 }
 
+// shared/zennyWatchlist.ts
+var WATCHLIST_SYMBOLS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "DOGEUSDT",
+  "ADAUSDT",
+  "AVAXUSDT"
+];
+
 // server/modules/zenny/execution/computeSize.ts
 function computeSize(input) {
   if (input.equity <= 0) return null;
@@ -5662,6 +5671,21 @@ function rejectionMessage(reason) {
   return reason;
 }
 
+// server/modules/zenny/execution/replayPosition.ts
+function replayPosition(input) {
+  let current = input.position;
+  for (const bar of input.bars) {
+    if (bar.openTime <= current.lastEvaluatedAt) continue;
+    current = reduceStep({
+      position: current,
+      bar,
+      equity: input.equity,
+      config: input.config
+    });
+  }
+  return current;
+}
+
 // server/modules/zenny/persistence/paperTradeStore.ts
 import { and as and3, eq as eq3 } from "drizzle-orm";
 function toRow(p) {
@@ -5859,7 +5883,8 @@ async function runPaperTradeTick(input) {
     });
     throw err;
   }
-  const latestClosedBar = pickLatestClosedBar(analysisState.candles, now);
+  const closedBars = collectClosedBars(analysisState.candles, now);
+  const latestClosedBar = closedBars.at(-1) ?? null;
   if (!latestClosedBar) {
     noTransitionReason = "no-closed-bar-yet";
     await logTick({
@@ -5880,27 +5905,24 @@ async function runPaperTradeTick(input) {
   }
   const openPositions = await loadOpenPositions(input.symbol, input.timeframe);
   for (const pos of openPositions) {
-    if (latestClosedBar.openTime <= pos.lastEvaluatedAt) {
-      continue;
-    }
     const before = pos.status;
-    const after = reduceStep({
+    const current = replayPosition({
       position: pos,
-      bar: latestClosedBar,
+      bars: closedBars,
       equity: account.currentEquity,
       config: cfg
     });
-    await upsertPosition(after);
-    if (after.status !== before) {
+    await upsertPosition(current);
+    if (current.status !== before) {
       transitions.push({
-        id: after.id,
+        id: current.id,
         from: before,
-        to: after.status,
-        reason: after.exitReason
+        to: current.status,
+        reason: current.exitReason
       });
     }
-    if (after.status === "CLOSED" && before === "FILLED" && after.realisedPnl !== null) {
-      account = applyPnl(account, after.realisedPnl);
+    if (current.status === "CLOSED" && current.realisedPnl !== null) {
+      account = applyPnl(account, current.realisedPnl);
     }
   }
   const tfPlans = analysisState.tradePlanResult.plansPerTimeframe?.[input.timeframe] ?? [];
@@ -5992,37 +6014,28 @@ function pickAccount(account) {
     drawdownPct: account.drawdownPct
   };
 }
-function pickLatestClosedBar(candles, now) {
-  for (let i = candles.length - 1; i >= 0; i--) {
-    const c = candles[i];
+function collectClosedBars(candles, now) {
+  const bars = [];
+  for (const c of candles) {
     if (c.closeTime <= now) {
-      return {
+      bars.push({
         openTime: c.openTime,
         closeTime: c.closeTime,
         open: c.open,
         high: c.high,
         low: c.low,
         close: c.close
-      };
+      });
     }
   }
-  return null;
+  return bars;
 }
 function makePositionId(symbol, timeframe, phase, bar) {
   return `${symbol}-${timeframe}-${phase}-${bar}`;
 }
 
-// server/routes/zennyRoutes.ts
-var PAPER_TRADE_WATCHLIST = [
-  { symbol: "BTCUSDT", timeframe: "15m" }
-];
-var sharedProvider = null;
-function getProvider() {
-  if (!sharedProvider) {
-    sharedProvider = new BinanceProvider(DEFAULT_INFRASTRUCTURE_CONFIG);
-  }
-  return sharedProvider;
-}
+// server/modules/zenny/runner/watchlist.ts
+var PAPER_TRADE_WATCHLIST = WATCHLIST_SYMBOLS.map((symbol) => ({ symbol, timeframe: "15m" }));
 async function runPaperTradeWatchlistTick(provider) {
   const results = [];
   for (const watch of PAPER_TRADE_WATCHLIST) {
@@ -6042,6 +6055,15 @@ async function runPaperTradeWatchlistTick(provider) {
     }
   }
   return results;
+}
+
+// server/routes/zennyRoutes.ts
+var sharedProvider = null;
+function getProvider() {
+  if (!sharedProvider) {
+    sharedProvider = new BinanceProvider(DEFAULT_INFRASTRUCTURE_CONFIG);
+  }
+  return sharedProvider;
 }
 var VALID_TIMEFRAMES = /* @__PURE__ */ new Set([
   "15m",

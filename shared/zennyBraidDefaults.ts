@@ -177,8 +177,9 @@ function makeLiquidityPoolPassConfig(
       weightLastLeg: 0.45,
       weightTouchCount: 0.3,
       brokenPenalty: 0.15,
-      // Reset/default is a recovery view: score everything, hide nothing.
-      strengthThreshold: 0,
+      // Default hides the weakest levels so the chart loads clean rather than
+      // cluttered. Drag the Pass Playground slider to 0 to see everything.
+      strengthThreshold: 0.5,
     },
     // N=14 stays constant across TFs (matches RSI/ADX/Wilder convention).
     // The TF-invariance comes from volatility normalisation in the slope

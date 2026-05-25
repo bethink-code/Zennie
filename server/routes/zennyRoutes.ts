@@ -11,17 +11,12 @@ import { fetchRecentLiquidations } from "../modules/zenny/analysis/data/fetchRec
 import type { PassConfig } from "../modules/zenny/analysis/passes/types";
 import type { Timeframe } from "../../shared/zennyTypes";
 import { getDefaultBraidCountForTimeframe } from "../../shared/zennyBraidDefaults";
-import { runPaperTradeTick } from "../modules/zenny/runner/runPaperTradeTick";
+import { runPaperTradeWatchlistTick } from "../modules/zenny/runner/watchlist";
 import {
   listPositions,
   loadAccount,
   loadOpenPositions,
 } from "../modules/zenny/persistence/paperTradeStore";
-
-// Pairs to tick on each cron run. Keep small in v0; extend later.
-const PAPER_TRADE_WATCHLIST: Array<{ symbol: string; timeframe: Timeframe }> = [
-  { symbol: "BTCUSDT", timeframe: "15m" },
-];
 
 // Single shared provider per process (Observer pattern — multi-tenant friendly).
 // In Phase 6 this becomes per-symbol via createMarketDataService.
@@ -31,27 +26,6 @@ function getProvider(): BinanceProvider {
     sharedProvider = new BinanceProvider(DEFAULT_INFRASTRUCTURE_CONFIG);
   }
   return sharedProvider;
-}
-
-async function runPaperTradeWatchlistTick(provider: BinanceProvider) {
-  const results = [];
-  for (const watch of PAPER_TRADE_WATCHLIST) {
-    try {
-      const r = await runPaperTradeTick({
-        provider,
-        symbol: watch.symbol,
-        timeframe: watch.timeframe,
-      });
-      results.push(r);
-    } catch (e) {
-      results.push({
-        symbol: watch.symbol,
-        timeframe: watch.timeframe,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-  return results;
 }
 
 const VALID_TIMEFRAMES: ReadonlySet<Timeframe> = new Set([
