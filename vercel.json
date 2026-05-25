@@ -16,7 +16,7 @@
   "crons": [
     {
       "path": "/api/zenny/paper-trade-tick",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 * * * *"
     }
   ]
 }

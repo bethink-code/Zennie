@@ -183,15 +183,17 @@ describe("reduceStep — LIVE transitions", () => {
     let pos = newPos(plan({ entry: 100, stop: 95, target: 110 }));
     pos = reduceStep({
       position: pos,
-      bar: bar({ openTime: TF_MS, high: 96, low: 94 }),
+      bar: bar({ openTime: TF_MS, high: 105, low: 101 }),
       equity: EQUITY,
       config: DEFAULT_EXECUTION_CONFIG,
     });
-    // After 5 bars without fill (entryValidBars=5), should expire.
+    // A long limit-buy at 100 fills when price drops to or below 100. To leave
+    // it unfilled the bars must stay ABOVE the limit (low > 100) — price never
+    // dips to the order. After entryValidBars=5 bars unfilled, it expires.
     for (let i = 2; i <= 7; i++) {
       pos = reduceStep({
         position: pos,
-        bar: bar({ openTime: i * TF_MS, high: 96, low: 94 }), // no touch
+        bar: bar({ openTime: i * TF_MS, high: 105, low: 101 }), // never touches 100
         equity: EQUITY,
         config: DEFAULT_EXECUTION_CONFIG,
       });

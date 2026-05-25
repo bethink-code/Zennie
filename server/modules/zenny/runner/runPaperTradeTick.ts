@@ -4,13 +4,23 @@
 //   1. Load account state from DB.
 //   2. If kill switch HARD_TRIPPED → no-op, log, return.
 //   3. Run analysis → extract candles + TradePlan.
-//   4. Find the most recent CLOSED bar (closeTime ≤ now).
+//   4. Collect every CLOSED bar (closeTime ≤ now), ascending.
 //   5. Load any open position.
-//   6. If open: reduceStep with the latest closed bar.
+//   6. If open: replay reduceStep over EVERY closed bar since the position's
+//      lastEvaluatedAt — not just the most recent one.
 //      - On CLOSED transition: update account currentEquity + peakEquity.
 //   7. Else if no open AND TradePlan exists: create + submit the paper order.
 //   8. Re-evaluate kill switch with new equity.
 //   9. Persist account + log tick.
+//
+// Why replay multiple bars (step 6): the cron cadence is decoupled from the
+// trading timeframe to keep DB compute cheap (an hourly cron against 15m bars
+// leaves 4 bars to process per tick). Exits must be checked on EVERY closed
+// bar — a stop hit on an intermediate bar can't be skipped just because the
+// cron only fires hourly. The reducer is bar-by-bar and bumps lastEvaluatedAt,
+// so replaying successive bars is exact. New entries (step 7) still fire only
+// at cron cadence — they enter at the current decision price, so deferring
+// them to the tick is correct, not a fidelity loss.
 //
 // All state lives in DB. Never holds in-memory state across invocations.
 
@@ -23,7 +33,7 @@ import {
   type ExecutionConfig,
 } from "../execution/executionConfig";
 import { killSwitchEvaluate } from "../execution/killSwitchEvaluate";
-import { reduceStep } from "../execution/reduceStep";
+import { replayPosition } from "../execution/replayPosition";
 import type {
   ExecutionBar,
   PositionRecord,
@@ -126,7 +136,8 @@ export async function runPaperTradeTick(
     throw err;
   }
 
-  const latestClosedBar = pickLatestClosedBar(analysisState.candles, now);
+  const closedBars = collectClosedBars(analysisState.candles, now);
+  const latestClosedBar = closedBars.at(-1) ?? null;
   if (!latestClosedBar) {
     noTransitionReason = "no-closed-bar-yet";
     await logTick({
@@ -147,33 +158,33 @@ export async function runPaperTradeTick(
   }
 
   // Process any open position(s). v0: at most one per (symbol, tf) but loop
-  // handles N to keep the structure honest.
+  // handles N to keep the structure honest. Each position is replayed bar by
+  // bar over every closed bar since its lastEvaluatedAt, so exits land on the
+  // exact bar that hit them regardless of cron cadence. We persist once per
+  // position after the replay (one write, not one per bar).
   const openPositions = await loadOpenPositions(input.symbol, input.timeframe);
   for (const pos of openPositions) {
-    if (latestClosedBar.openTime <= pos.lastEvaluatedAt) {
-      // Already evaluated this bar (cron firing twice in the same hour).
-      // Skip the lookahead invariant violation.
-      continue;
-    }
     const before = pos.status;
-    const after = reduceStep({
+    const current = replayPosition({
       position: pos,
-      bar: latestClosedBar,
+      bars: closedBars,
       equity: account.currentEquity,
       config: cfg,
     });
-    await upsertPosition(after);
-    if (after.status !== before) {
+    await upsertPosition(current);
+    if (current.status !== before) {
       transitions.push({
-        id: after.id,
+        id: current.id,
         from: before,
-        to: after.status,
-        reason: after.exitReason,
+        to: current.status,
+        reason: current.exitReason,
       });
     }
-    // If newly CLOSED, fold the realised PnL into the account.
-    if (after.status === "CLOSED" && before === "FILLED" && after.realisedPnl !== null) {
-      account = applyPnl(account, after.realisedPnl);
+    // Newly CLOSED this tick — fold realised PnL into the account. `before` is
+    // always non-terminal (loadOpenPositions only returns PLANNED/LIVE/FILLED),
+    // so a position that goes LIVE→CLOSED within one batch is still counted.
+    if (current.status === "CLOSED" && current.realisedPnl !== null) {
+      account = applyPnl(account, current.realisedPnl);
     }
   }
 
@@ -287,25 +298,24 @@ function pickAccount(account: PaperAccountRow) {
   };
 }
 
-function pickLatestClosedBar(
-  candles: Candle[],
-  now: number,
-): ExecutionBar | null {
-  // Walk backward — the last entry might be the in-progress bar (closeTime > now).
-  for (let i = candles.length - 1; i >= 0; i--) {
-    const c = candles[i];
+function collectClosedBars(candles: Candle[], now: number): ExecutionBar[] {
+  // Analysis candles are ascending by time; the final entry may be the
+  // in-progress bar (closeTime > now). Keep every bar that has closed, in
+  // order, so the caller can replay them sequentially.
+  const bars: ExecutionBar[] = [];
+  for (const c of candles) {
     if (c.closeTime <= now) {
-      return {
+      bars.push({
         openTime: c.openTime,
         closeTime: c.closeTime,
         open: c.open,
         high: c.high,
         low: c.low,
         close: c.close,
-      };
+      });
     }
   }
-  return null;
+  return bars;
 }
 
 function makePositionId(
