@@ -1,0 +1,36 @@
+name: Zenny paper-trade tick
+
+# Primary scheduler for the paper-trading runner. Vercel's native cron does not
+# fire reliably on this project's plan, so GitHub Actions is the source of truth
+# (this is how it ran before the short-lived "native cron" migration). It just
+# POSTs the cron endpoint; all the work happens server-side in the deployed API.
+#
+# CRON_SECRET must be set as a repo secret (mirrors the Doppler prd value, which
+# is also what the Vercel runtime reads — so they match).
+
+on:
+  schedule:
+    - cron: "*/15 * * * *" # every 15 min (UTC); GitHub may delay a few minutes
+  workflow_dispatch: {} # manual "Run workflow" button
+
+# Don't pile up overlapping runs if one is slow.
+concurrency:
+  group: paper-trade-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST paper-trade-tick
+        run: |
+          code=$(curl -sSL -m 90 -o /tmp/resp.json -w "%{http_code}" \
+            -X POST "https://www.buttersideup.co.za/api/zenny/paper-trade-tick" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json")
+          echo "HTTP $code"
+          head -c 800 /tmp/resp.json; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::paper-trade-tick returned HTTP $code"
+            exit 1
+          fi
