@@ -13,10 +13,13 @@ import type { Timeframe } from "../../shared/zennyTypes";
 import { getDefaultBraidCountForTimeframe } from "../../shared/zennyBraidDefaults";
 import { runPaperTradeWatchlistTick } from "../modules/zenny/runner/watchlist";
 import {
+  listAllPositions,
   listPositions,
   loadAccount,
   loadOpenPositions,
+  type PaperAccountRow,
 } from "../modules/zenny/persistence/paperTradeStore";
+import type { PositionRecord } from "../modules/zenny/execution/types";
 
 // Single shared provider per process (Observer pattern — multi-tenant friendly).
 // In Phase 6 this becomes per-symbol via createMarketDataService.
@@ -26,6 +29,23 @@ function getProvider(): BinanceProvider {
     sharedProvider = new BinanceProvider(DEFAULT_INFRASTRUCTURE_CONFIG);
   }
   return sharedProvider;
+}
+
+// Shared PnL summary so the per-symbol and global endpoints agree. Realised
+// PnL comes from closed positions; equity delta comes from the account.
+function summarisePnl(positions: PositionRecord[], account: PaperAccountRow) {
+  const closed = positions.filter((p) => p.status === "CLOSED");
+  const winners = closed.filter((p) => (p.realisedPnl ?? 0) > 0).length;
+  const losers = closed.filter((p) => (p.realisedPnl ?? 0) < 0).length;
+  const abs = account.currentEquity - account.startingEquity;
+  return {
+    abs,
+    pct: account.startingEquity > 0 ? (abs / account.startingEquity) * 100 : 0,
+    closedTrades: closed.length,
+    winners,
+    losers,
+    winRate: closed.length > 0 ? winners / closed.length : null,
+  };
 }
 
 const VALID_TIMEFRAMES: ReadonlySet<Timeframe> = new Set([
@@ -223,35 +243,44 @@ export function registerZennyRoutes(app: Express) {
           listPositions(symbol, timeframe, limit),
           loadAccount(),
         ]);
-        // Convenience PnL fields so callers don't have to compute.
-        const pnlAbs = account.currentEquity - account.startingEquity;
-        const pnlPct =
-          account.startingEquity > 0
-            ? (pnlAbs / account.startingEquity) * 100
-            : 0;
-        const closedPositions = positions.filter((p) => p.status === "CLOSED");
-        const winners = closedPositions.filter(
-          (p) => (p.realisedPnl ?? 0) > 0,
-        ).length;
-        const losers = closedPositions.filter(
-          (p) => (p.realisedPnl ?? 0) < 0,
-        ).length;
         res.json({
           symbol,
           timeframe,
           account,
-          pnl: {
-            abs: pnlAbs,
-            pct: pnlPct,
-            closedTrades: closedPositions.length,
-            winners,
-            losers,
-            winRate:
-              closedPositions.length > 0
-                ? winners / closedPositions.length
-                : null,
-          },
+          pnl: summarisePnl(positions, account),
           positions,
+        });
+      } catch (err) {
+        res.status(500).json({
+          error: "fetch_failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // GET /api/zenny/paper-trades/all — global view across every symbol/timeframe.
+  // Powers the P&L summary page. No auth in v0 — read-only, no PII.
+  app.get(
+    "/api/zenny/paper-trades/all",
+    async (_req: Request, res: Response) => {
+      try {
+        const [positions, account] = await Promise.all([
+          listAllPositions(1000),
+          loadAccount(),
+        ]);
+        const open = positions
+          .filter((p) => ["PLANNED", "LIVE", "FILLED"].includes(p.status))
+          .sort((a, b) => a.symbol.localeCompare(b.symbol));
+        const closed = positions
+          .filter((p) => p.status === "CLOSED")
+          .sort((a, b) => (b.closedAtBarTs ?? 0) - (a.closedAtBarTs ?? 0));
+        res.json({
+          account,
+          pnl: summarisePnl(positions, account),
+          open,
+          closed,
+          computedAtMs: Date.now(),
         });
       } catch (err) {
         res.status(500).json({

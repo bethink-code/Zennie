@@ -5772,6 +5772,10 @@ async function listPositions(symbol, timeframe, limit = 100) {
   ).limit(limit);
   return rows.map(fromRow);
 }
+async function listAllPositions(limit = 100) {
+  const rows = await db.select().from(zennyPaperPositions).limit(limit);
+  return rows.map(fromRow);
+}
 var DEFAULT_ACCOUNT_ID = "default";
 var DEFAULT_STARTING_EQUITY = 500;
 async function loadAccount(id = DEFAULT_ACCOUNT_ID) {
@@ -6065,6 +6069,20 @@ function getProvider() {
   }
   return sharedProvider;
 }
+function summarisePnl(positions, account) {
+  const closed = positions.filter((p) => p.status === "CLOSED");
+  const winners = closed.filter((p) => (p.realisedPnl ?? 0) > 0).length;
+  const losers = closed.filter((p) => (p.realisedPnl ?? 0) < 0).length;
+  const abs = account.currentEquity - account.startingEquity;
+  return {
+    abs,
+    pct: account.startingEquity > 0 ? abs / account.startingEquity * 100 : 0,
+    closedTrades: closed.length,
+    winners,
+    losers,
+    winRate: closed.length > 0 ? winners / closed.length : null
+  };
+}
 var VALID_TIMEFRAMES = /* @__PURE__ */ new Set([
   "15m",
   "1H",
@@ -6217,28 +6235,37 @@ function registerZennyRoutes(app2) {
           listPositions(symbol, timeframe, limit),
           loadAccount()
         ]);
-        const pnlAbs = account.currentEquity - account.startingEquity;
-        const pnlPct = account.startingEquity > 0 ? pnlAbs / account.startingEquity * 100 : 0;
-        const closedPositions = positions.filter((p) => p.status === "CLOSED");
-        const winners = closedPositions.filter(
-          (p) => (p.realisedPnl ?? 0) > 0
-        ).length;
-        const losers = closedPositions.filter(
-          (p) => (p.realisedPnl ?? 0) < 0
-        ).length;
         res.json({
           symbol,
           timeframe,
           account,
-          pnl: {
-            abs: pnlAbs,
-            pct: pnlPct,
-            closedTrades: closedPositions.length,
-            winners,
-            losers,
-            winRate: closedPositions.length > 0 ? winners / closedPositions.length : null
-          },
+          pnl: summarisePnl(positions, account),
           positions
+        });
+      } catch (err) {
+        res.status(500).json({
+          error: "fetch_failed",
+          message: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  );
+  app2.get(
+    "/api/zenny/paper-trades/all",
+    async (_req, res) => {
+      try {
+        const [positions, account] = await Promise.all([
+          listAllPositions(1e3),
+          loadAccount()
+        ]);
+        const open = positions.filter((p) => ["PLANNED", "LIVE", "FILLED"].includes(p.status)).sort((a, b) => a.symbol.localeCompare(b.symbol));
+        const closed = positions.filter((p) => p.status === "CLOSED").sort((a, b) => (b.closedAtBarTs ?? 0) - (a.closedAtBarTs ?? 0));
+        res.json({
+          account,
+          pnl: summarisePnl(positions, account),
+          open,
+          closed,
+          computedAtMs: Date.now()
         });
       } catch (err) {
         res.status(500).json({

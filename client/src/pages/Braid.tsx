@@ -614,6 +614,14 @@ export default function Braid() {
           >
             {isFetching ? "..." : "Refresh"}
           </button>
+          <Link href="/pnl">
+            <button
+              className="border rounded px-2 py-0.5 text-sm transition-colors border-[#3d3d3a] bg-[#3d3d3a] text-white hover:opacity-90"
+              title="All open & closed paper trades across every symbol"
+            >
+              P&L
+            </button>
+          </Link>
           {user?.isAdmin && (
             <Link href="/admin">
               <button

@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/useAuth";
 import Landing from "@/pages/Landing";
 import Admin from "@/pages/Admin";
 import Braid from "@/pages/Braid";
+import PnL from "@/pages/PnL";
 import NotFound from "@/pages/not-found";
 import TermsModal from "@/components/TermsModal";
 
@@ -26,6 +27,9 @@ export default function App() {
         </Route>
         <Route path="/admin">
           {isAuthenticated && user?.isAdmin ? <Admin /> : <Redirect to="/" />}
+        </Route>
+        <Route path="/pnl">
+          {isAuthenticated ? <PnL /> : <Redirect to="/" />}
         </Route>
         <Route path="/braid">
           <Redirect to="/" />
