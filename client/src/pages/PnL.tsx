@@ -62,6 +62,11 @@ export default function PnL() {
               ← Braid
             </button>
           </Link>
+          <Link href="/charts">
+            <button className="rounded border border-black/15 px-2 py-0.5 text-sm hover:bg-[#f1efe8]">
+              Charts
+            </button>
+          </Link>
         </div>
         <div className="flex items-center gap-3 text-xs text-[#888780]">
           {data && <span>updated {new Date(data.computedAtMs).toLocaleTimeString()}</span>}

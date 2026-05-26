@@ -614,6 +614,14 @@ export default function Braid() {
           >
             {isFetching ? "..." : "Refresh"}
           </button>
+          <Link href="/charts">
+            <button
+              className="border rounded px-2 py-0.5 text-sm transition-colors border-black/15 hover:bg-[#f1efe8]"
+              title="Watchlist gallery — every symbol's chart + its resting order"
+            >
+              Charts
+            </button>
+          </Link>
           <Link href="/pnl">
             <button
               className="border rounded px-2 py-0.5 text-sm transition-colors border-[#3d3d3a] bg-[#3d3d3a] text-white hover:opacity-90"

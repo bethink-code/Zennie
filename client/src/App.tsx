@@ -4,6 +4,7 @@ import Landing from "@/pages/Landing";
 import Admin from "@/pages/Admin";
 import Braid from "@/pages/Braid";
 import PnL from "@/pages/PnL";
+import Charts from "@/pages/Charts";
 import NotFound from "@/pages/not-found";
 import TermsModal from "@/components/TermsModal";
 
@@ -30,6 +31,9 @@ export default function App() {
         </Route>
         <Route path="/pnl">
           {isAuthenticated ? <PnL /> : <Redirect to="/" />}
+        </Route>
+        <Route path="/charts">
+          {isAuthenticated ? <Charts /> : <Redirect to="/" />}
         </Route>
         <Route path="/braid">
           <Redirect to="/" />
