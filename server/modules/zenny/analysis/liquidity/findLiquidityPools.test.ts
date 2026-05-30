@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { Candle } from "../../../../../shared/zennyTypes";
 import { findLiquidityPools } from "./findLiquidityPools";
 
-function c(i: number, open: number, high: number, low: number, close: number): Candle {
+function c(
+  i: number,
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+): Candle {
   const stepMs = 900_000;
   return {
     openTime: Date.UTC(2026, 0, 1) + i * stepMs,
@@ -15,66 +21,49 @@ function c(i: number, open: number, high: number, low: number, close: number): C
   };
 }
 
-describe("findLiquidityPools", () => {
-  it("creates wick liquidity from closed candles without requiring pivots", () => {
+describe("findLiquidityPools (pure detector — full zones, no depletion)", () => {
+  it("emits the FULL wick zone (body line → wick extreme)", () => {
     const pools = findLiquidityPools({
       symbol: "BTCUSDT",
       timeframe: "15m",
       candles: [
         c(0, 100, 101, 99, 100),
-        c(1, 100, 110, 99, 104),
+        c(1, 100, 110, 99, 104), // upper wick 104→110
         c(2, 104, 106, 102, 105),
         c(3, 105, 106, 103, 104),
       ],
     });
 
-    expect(
-      pools.some(
-        (p) =>
-          p.side === "RESISTANCE" &&
-          p.sourceIndex === 1 &&
-          p.zoneLow === 106 &&
-          p.zoneHigh === 110,
-      ),
-    ).toBe(true);
+    const pool = pools.find(
+      (p) => p.side === "RESISTANCE" && p.sourceIndex === 1,
+    );
+    expect(pool).toBeDefined();
+    // Full zone: body top max(open,close)=104 → wick top 110. (Previously the
+    // depletion model shrank this to 106; lifecycle now lives in checkPoolAliveness.)
+    expect(pool?.zoneLow).toBe(104);
+    expect(pool?.zoneHigh).toBe(110);
+    expect(pool?.targetPrice).toBe(104);
   });
 
-  it("draws only the unconsumed remainder after later candles enter the pool", () => {
+  it("does NOT shrink the zone when later candles enter it", () => {
     const pools = findLiquidityPools({
       symbol: "BTCUSDT",
       timeframe: "15m",
       candles: [
         c(0, 100, 101, 99, 100),
         c(1, 100, 110, 99, 104),
-        c(2, 104, 107, 102, 105),
+        c(2, 104, 107, 102, 105), // reaches into the zone — must NOT shrink it
         c(3, 105, 106, 103, 104),
       ],
     });
-
-    const pool = pools.find((p) => p.side === "RESISTANCE" && p.sourceIndex === 1);
-    expect(pool).toBeDefined();
-    expect(pool?.zoneLow).toBe(107);
+    const pool = pools.find(
+      (p) => p.side === "RESISTANCE" && p.sourceIndex === 1,
+    );
+    expect(pool?.zoneLow).toBe(104);
     expect(pool?.zoneHigh).toBe(110);
   });
 
-  it("removes a pool once later candles fully consume its wick zone", () => {
-    const pools = findLiquidityPools({
-      symbol: "BTCUSDT",
-      timeframe: "15m",
-      candles: [
-        c(0, 100, 101, 99, 100),
-        c(1, 100, 110, 99, 104),
-        c(2, 104, 111, 102, 105),
-        c(3, 105, 106, 103, 104),
-      ],
-    });
-
-    expect(
-      pools.some((p) => p.side === "RESISTANCE" && p.sourceIndex === 1),
-    ).toBe(false);
-  });
-
-  it("uses the most recent candle to consume pools but not create them", () => {
+  it("does not create a pool from the most recent (possibly forming) candle", () => {
     const pools = findLiquidityPools({
       symbol: "BTCUSDT",
       timeframe: "15m",
@@ -82,69 +71,10 @@ describe("findLiquidityPools", () => {
         c(0, 100, 101, 99, 100),
         c(1, 100, 110, 99, 104),
         c(2, 104, 106, 102, 105),
-        c(3, 105, 112, 104, 106),
+        c(3, 105, 112, 104, 106), // last candle — must not birth a pool
       ],
     });
-
     expect(pools.some((p) => p.sourceIndex === 3)).toBe(false);
-    expect(
-      pools.some((p) => p.side === "RESISTANCE" && p.sourceIndex === 1),
-    ).toBe(false);
-  });
-
-  it("depletes higher-timeframe pools with lower-timeframe candles inside the source candle", () => {
-    const hourMs = 3_600_000;
-    const minuteMs = 60_000;
-    const pools = findLiquidityPools({
-      symbol: "BTCUSDT",
-      timeframe: "1H",
-      candles: [
-        {
-          openTime: 0,
-          closeTime: hourMs,
-          open: 100,
-          high: 110,
-          low: 99,
-          close: 104,
-          volume: 1,
-        },
-        {
-          openTime: hourMs,
-          closeTime: 2 * hourMs,
-          open: 104,
-          high: 106,
-          low: 102,
-          close: 105,
-          volume: 1,
-        },
-      ],
-      depletionCandles: [
-        c(0, 100, 101, 99, 100),
-        {
-          openTime: 15 * minuteMs,
-          closeTime: 30 * minuteMs,
-          open: 104,
-          high: 107,
-          low: 102,
-          close: 105,
-          volume: 1,
-        },
-        {
-          openTime: 30 * minuteMs,
-          closeTime: 45 * minuteMs,
-          open: 105,
-          high: 106,
-          low: 103,
-          close: 104,
-          volume: 1,
-        },
-      ],
-    });
-
-    const pool = pools.find((p) => p.side === "RESISTANCE" && p.sourceIndex === 0);
-    expect(pool).toBeDefined();
-    expect(pool?.zoneLow).toBe(107);
-    expect(pool?.zoneHigh).toBe(110);
   });
 
   it("does not create wick-probe pools from mid-range noise", () => {

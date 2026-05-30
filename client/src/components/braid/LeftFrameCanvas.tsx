@@ -166,7 +166,10 @@ export function LeftFrameCanvas({
     if (width === 0 || state.candles.length === 0) return null;
     const cw = width - PAD.l - PAD.r;
     const ch = H - PAD.t - PAD.b;
-    const candlePrices: number[] = state.candles.flatMap((c) => [c.high, c.low]);
+    const candlePrices: number[] = state.candles.flatMap((c) => [
+      c.high,
+      c.low,
+    ]);
     let minP = Math.min(...candlePrices);
     let maxP = Math.max(...candlePrices);
     const padPrice = (maxP - minP) * PRICE_PAD_FRACTION;
@@ -281,7 +284,10 @@ export function LeftFrameCanvas({
         if (lvl.price >= lastClose) above.push(lvl);
         else below.push(lvl);
       }
-      const rank = (a: (typeof onScreen)[number], b: (typeof onScreen)[number]) => {
+      const rank = (
+        a: (typeof onScreen)[number],
+        b: (typeof onScreen)[number],
+      ) => {
         const aScore = a.passes?.aggregate?.score ?? -1;
         const bScore = b.passes?.aggregate?.score ?? -1;
         if (aScore !== bScore) return bScore - aScore;
@@ -330,13 +336,7 @@ export function LeftFrameCanvas({
       const y = dims.toY(level.price);
       return y >= PAD.t && y <= PAD.t + dims.ch;
     });
-  }, [
-    dims,
-    showCurrentTf,
-    showOtherTfs,
-    state.levels,
-    state.primaryTimeframe,
-  ]);
+  }, [dims, showCurrentTf, showOtherTfs, state.levels, state.primaryTimeframe]);
 
   // Click anywhere in the chart area → select that candle.
   // Click outside the chart area (inside the wrapper) → clear selection.
@@ -473,7 +473,10 @@ export function LeftFrameCanvas({
                   fontFamily="system-ui, sans-serif"
                   pointerEvents="none"
                 >
-                  {sideLabel} ${swing.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  {sideLabel} $
+                  {swing.price.toLocaleString(undefined, {
+                    maximumFractionDigits: 0,
+                  })}
                 </text>
               </g>
             );
@@ -538,7 +541,8 @@ export function LeftFrameCanvas({
           candleX={dims.toX(selectedCandleIndex)}
           chartWidth={dims.W}
           verticalSide={
-            (selectedCandle.high + selectedCandle.low) / 2 > (dims.minP + dims.maxP) / 2
+            (selectedCandle.high + selectedCandle.low) / 2 >
+            (dims.minP + dims.maxP) / 2
               ? "bottom"
               : "top"
           }
@@ -1030,21 +1034,13 @@ function drawCanvas(
   };
   const activePools = opts.showPools
     ? selectPoolsForRender(
-        state.pools.filter(
-          (p) =>
-            p.status === "active" &&
-            renderablePool(p),
-        ),
+        state.pools.filter((p) => p.status === "active" && renderablePool(p)),
       )
     : [];
   const sweptPools =
     opts.showPools && opts.showSweptPools
       ? selectPoolsForRender(
-          state.pools.filter(
-            (p) =>
-              p.status === "swept" &&
-              renderablePool(p),
-          ),
+          state.pools.filter((p) => p.status === "swept" && renderablePool(p)),
         )
       : [];
   const deadPools =
@@ -1082,6 +1078,23 @@ function drawCanvas(
     ctx.setLineDash(pool.status === "dead" ? [4, 3] : []);
     ctx.strokeRect(x1, yTop, w, h);
     ctx.setLineDash([]);
+
+    // Step 1 qualification tint — overdraw a swept pool's border by its
+    // turning-point / run-through verdict so the chart shows which pools the
+    // engine deems fade-worthy. Teal = fade candidate, amber = do-not-fade.
+    // Unconfirmed keeps the faint type-coloured border. Colours are chosen to
+    // not collide with the red/green pool-type fill.
+    const verdict =
+      pool.status === "swept" ? pool.qualification?.verdict : undefined;
+    if (verdict === "turning-point" || verdict === "run-through") {
+      ctx.strokeStyle =
+        verdict === "turning-point"
+          ? "rgba(20,160,150,0.95)"
+          : "rgba(214,138,20,0.95)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, yTop, w, h);
+      ctx.lineWidth = 1;
+    }
 
     ctx.save();
     ctx.beginPath();
@@ -1211,7 +1224,10 @@ function drawCanvas(
     ctx.fillText(formatPrice(lastClose), PAD.l - 4, markY + 4);
 
     const rhsLabel = formatPrice(lastClose);
-    const rhsW = Math.min(PAD.r - 12, Math.max(52, ctx.measureText(rhsLabel).width + 14));
+    const rhsW = Math.min(
+      PAD.r - 12,
+      Math.max(52, ctx.measureText(rhsLabel).width + 14),
+    );
     const rhsX = PAD.l + dims.cw + PAD.r - rhsW - 4;
     const rhsY = Math.max(PAD.t + 1, Math.min(PAD.t + dims.ch - 17, markY - 9));
     ctx.strokeStyle = "rgba(61,61,58,0.38)";
@@ -1404,7 +1420,8 @@ function selectPoolsForSide<T extends AnalysisStateClient["pools"][number]>(
   const maxPerSide = 8;
   return [...pools]
     .sort((a, b) => {
-      const tf = (TF_RANK[b.sourceTimeframe] ?? 0) - (TF_RANK[a.sourceTimeframe] ?? 0);
+      const tf =
+        (TF_RANK[b.sourceTimeframe] ?? 0) - (TF_RANK[a.sourceTimeframe] ?? 0);
       if (tf !== 0) return tf;
       const pull = (b.pull?.decayed ?? 0) - (a.pull?.decayed ?? 0);
       if (pull !== 0) return pull;

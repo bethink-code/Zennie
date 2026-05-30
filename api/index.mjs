@@ -2449,15 +2449,55 @@ var TF_BASE = {
   M: 5
 };
 function levelStrength(input) {
-  const base = TF_BASE[input.sourceTimeframe] ?? 0;
+  const base2 = TF_BASE[input.sourceTimeframe] ?? 0;
   const recencyBoost = input.recency >= 0.7 ? 1 : 0;
   const primaryBoost = input.isPrimaryTimeframe ? 1 : 0;
-  const score = base + recencyBoost + primaryBoost;
+  const score = base2 + recencyBoost + primaryBoost;
   if (score <= 0) return "trivial";
   if (score === 1) return "weak";
   if (score <= 3) return "medium";
   if (score <= 5) return "strong";
   return "very_strong";
+}
+
+// server/modules/zenny/analysis/pool/checkPoolAliveness.ts
+function checkPoolAliveness(input) {
+  const extreme = input.side === "RESISTANCE" ? input.wickHigh : input.wickLow;
+  const sweepPrice = input.sweepPrice ?? extreme;
+  const deathLine = input.deathLine ?? extreme;
+  let sweptCandleIndex = null;
+  let sweptCandleOpenTime = null;
+  for (let i = input.startIndex + 1; i < input.candles.length; i++) {
+    const candle = input.candles[i];
+    if (sweptCandleIndex === null) {
+      const swept = input.side === "RESISTANCE" ? candle.high > sweepPrice : candle.low < sweepPrice;
+      if (swept) {
+        sweptCandleIndex = i;
+        sweptCandleOpenTime = candle.openTime;
+      }
+    }
+    const dead = input.side === "RESISTANCE" ? candle.close > deathLine : candle.close < deathLine;
+    if (dead) {
+      return {
+        status: "dead",
+        sweptCandleIndex,
+        sweptCandleOpenTime,
+        sweepReason: sweptCandleIndex !== null ? "wick_took_pool_extreme" : null,
+        deathCandleIndex: i,
+        deathCandleOpenTime: candle.openTime,
+        deathReason: "close_past_line"
+      };
+    }
+  }
+  return {
+    status: sweptCandleIndex === null ? "active" : "swept",
+    sweptCandleIndex,
+    sweptCandleOpenTime,
+    sweepReason: sweptCandleIndex !== null ? "wick_took_pool_extreme" : null,
+    deathCandleIndex: null,
+    deathCandleOpenTime: null,
+    deathReason: null
+  };
 }
 
 // server/modules/zenny/analysis/pool/pullPass.ts
@@ -2613,11 +2653,7 @@ function extractArms(input) {
 
 // server/modules/zenny/analysis/liquidity/findLiquidityPools.ts
 function findLiquidityPools(input) {
-  return findDepletedWickPools(input);
-}
-function findDepletedWickPools(input) {
   const candles = input.candles;
-  const depletionCandles = input.depletionCandles ?? candles;
   if (candles.length < 2) return [];
   const ranges = candles.map((c) => c.high - c.low).filter((r) => r > 0);
   if (ranges.length === 0) return [];
@@ -2633,50 +2669,30 @@ function findDepletedWickPools(input) {
     const lowerProbe = lowBody - candle.low;
     const minProbe = Math.max(medianRange * 0.2, candle.close * 8e-4);
     if (upperProbe >= minProbe && upperProbe / range >= 0.28 && isLocalRangeEdge(candles, sourceIndex, "RESISTANCE", 8, 2, 8e-4)) {
-      const remaining = remainingResistanceZone({
-        zoneLow: highBody,
+      candidates.push({
+        idSeed: `${input.symbol}-${input.timeframe}-wick-res-${sourceIndex}`,
+        kind: "pivot_probe",
+        side: "RESISTANCE",
+        targetPrice: highBody,
         zoneHigh: candle.high,
+        zoneLow: highBody,
         sourceIndex,
         sourceOpenTime: candle.openTime,
-        depletionCandles,
-        sameTimeframe: depletionCandles === candles
+        touchCount: 1
       });
-      if (remaining !== null) {
-        candidates.push({
-          idSeed: `${input.symbol}-${input.timeframe}-wick-res-${sourceIndex}`,
-          kind: "pivot_probe",
-          side: "RESISTANCE",
-          targetPrice: remaining.zoneLow,
-          zoneHigh: remaining.zoneHigh,
-          zoneLow: remaining.zoneLow,
-          sourceIndex,
-          sourceOpenTime: candle.openTime,
-          touchCount: 1
-        });
-      }
     }
     if (lowerProbe >= minProbe && lowerProbe / range >= 0.28 && isLocalRangeEdge(candles, sourceIndex, "SUPPORT", 8, 2, 8e-4)) {
-      const remaining = remainingSupportZone({
+      candidates.push({
+        idSeed: `${input.symbol}-${input.timeframe}-wick-sup-${sourceIndex}`,
+        kind: "pivot_probe",
+        side: "SUPPORT",
+        targetPrice: lowBody,
         zoneHigh: lowBody,
         zoneLow: candle.low,
         sourceIndex,
         sourceOpenTime: candle.openTime,
-        depletionCandles,
-        sameTimeframe: depletionCandles === candles
+        touchCount: 1
       });
-      if (remaining !== null) {
-        candidates.push({
-          idSeed: `${input.symbol}-${input.timeframe}-wick-sup-${sourceIndex}`,
-          kind: "pivot_probe",
-          side: "SUPPORT",
-          targetPrice: remaining.zoneHigh,
-          zoneHigh: remaining.zoneHigh,
-          zoneLow: remaining.zoneLow,
-          sourceIndex,
-          sourceOpenTime: candle.openTime,
-          touchCount: 1
-        });
-      }
     }
   }
   return dedupeCandidates(
@@ -2684,30 +2700,6 @@ function findDepletedWickPools(input) {
       (a, b) => a.sourceIndex - b.sourceIndex
     )
   );
-}
-function remainingResistanceZone(zone) {
-  let remainingLow = zone.zoneLow;
-  const candlesToRight = zone.sameTimeframe ? zone.depletionCandles.slice(zone.sourceIndex + 1) : zone.depletionCandles.filter(
-    (candle) => candle.openTime > zone.sourceOpenTime
-  );
-  for (const candle of candlesToRight) {
-    const high = candle.high;
-    if (high >= zone.zoneHigh) return null;
-    if (high > remainingLow) remainingLow = high;
-  }
-  return remainingLow < zone.zoneHigh ? { zoneLow: remainingLow, zoneHigh: zone.zoneHigh } : null;
-}
-function remainingSupportZone(zone) {
-  let remainingHigh = zone.zoneHigh;
-  const candlesToRight = zone.sameTimeframe ? zone.depletionCandles.slice(zone.sourceIndex + 1) : zone.depletionCandles.filter(
-    (candle) => candle.openTime > zone.sourceOpenTime
-  );
-  for (const candle of candlesToRight) {
-    const low = candle.low;
-    if (low <= zone.zoneLow) return null;
-    if (low < remainingHigh) remainingHigh = low;
-  }
-  return zone.zoneLow < remainingHigh ? { zoneLow: zone.zoneLow, zoneHigh: remainingHigh } : null;
 }
 function isLocalRangeEdge(candles, index2, side, lookback, lookahead, tolerancePct = 0) {
   const candle = candles[index2];
@@ -4902,6 +4894,134 @@ function assembleTradePlans(input) {
   };
 }
 
+// server/modules/zenny/decision/qualify/defaultConfig.ts
+var DEFAULT_QUALIFY_CONFIG = {
+  // Sweep then close back inside within 3 bars. Mirrors the wick module's
+  // SFP convention; left generous until the backtest narrows it.
+  reclaimMaxBars: 3,
+  // Consider the last 3 swing pivots per side as the live structure.
+  structureLookbackPivots: 3,
+  // 0.1% minimum break to count as a structure shift (filters one-tick pokes).
+  minShiftDisplacementPct: 1e-3,
+  // Full validated sequence by default — reclaim alone is not enough.
+  requireStructureShift: true
+};
+
+// server/modules/zenny/decision/qualify/detectStructureShift.ts
+var NO_SHIFT = {
+  shifted: false,
+  direction: null,
+  brokenPivotIndex: null,
+  brokenAtIndex: null,
+  displacement: 0
+};
+function detectStructureShift(input) {
+  const { candles, pivots, afterIndex, direction, lookbackPivots } = input;
+  if (candles.length === 0) return NO_SHIFT;
+  const refSide = direction === "up" ? "RESISTANCE" : "SUPPORT";
+  const refPivots = pivots.filter((p) => p.side === refSide && p.index <= afterIndex).sort((a, b) => b.index - a.index).slice(0, Math.max(1, lookbackPivots));
+  if (refPivots.length === 0) return NO_SHIFT;
+  const reference = direction === "up" ? refPivots.reduce((lo, p) => p.price < lo.price ? p : lo) : refPivots.reduce((hi, p) => p.price > hi.price ? p : hi);
+  const start = Math.max(afterIndex + 1, reference.index + 1);
+  for (let i = start; i < candles.length; i++) {
+    const close = candles[i].close;
+    const broke = direction === "up" ? close > reference.price : close < reference.price;
+    if (broke) {
+      const displacement = direction === "up" ? close - reference.price : reference.price - close;
+      return {
+        shifted: true,
+        direction,
+        brokenPivotIndex: reference.index,
+        brokenAtIndex: i,
+        displacement
+      };
+    }
+  }
+  return NO_SHIFT;
+}
+
+// server/modules/zenny/decision/qualify/qualifyPool.ts
+function qualifyPool(input) {
+  const cfg = input.config ?? DEFAULT_QUALIFY_CONFIG;
+  const { pool: pool2, candles, pivots } = input;
+  const reasons = [];
+  const fadeDirection = pool2.type === "RESISTANCE" ? "short" : "long";
+  const sweptIdx = pool2.sweptCandleIndexOnPrimary;
+  if (pool2.status !== "swept" || sweptIdx === null || sweptIdx < 0) {
+    return base(pool2.id, "unconfirmed", null, false, false, false, 0, [
+      "no sweep \u2014 pool not in swept state"
+    ]);
+  }
+  const reclaimed = checkConfirmation({
+    pool: pool2,
+    candles,
+    maxBarsAfterSweep: cfg.reclaimMaxBars
+  }).satisfied;
+  reasons.push(reclaimed ? "reclaimed (close back inside)" : "no reclaim");
+  const reversalDir = pool2.type === "RESISTANCE" ? "down" : "up";
+  const continuationDir = pool2.type === "RESISTANCE" ? "up" : "down";
+  const reversalShift = detectStructureShift({
+    candles,
+    pivots,
+    afterIndex: sweptIdx,
+    direction: reversalDir,
+    lookbackPivots: cfg.structureLookbackPivots
+  });
+  const continuationShift = detectStructureShift({
+    candles,
+    pivots,
+    afterIndex: sweptIdx,
+    direction: continuationDir,
+    lookbackPivots: cfg.structureLookbackPivots
+  });
+  const price = candles[candles.length - 1].close;
+  const minDisp = cfg.minShiftDisplacementPct * price;
+  const reversalShifted = reversalShift.shifted && reversalShift.displacement >= minDisp;
+  const continuationShifted = continuationShift.shifted && continuationShift.displacement >= minDisp;
+  if (reclaimed && (reversalShifted || !cfg.requireStructureShift)) {
+    reasons.push(
+      reversalShifted ? `reversal MSS (${reversalDir})` : "MSS gate disabled \u2014 reclaim only"
+    );
+    return base(
+      pool2.id,
+      "turning-point",
+      fadeDirection,
+      true,
+      true,
+      reversalShifted,
+      reversalShift.displacement,
+      reasons
+    );
+  }
+  if (!reclaimed && continuationShifted) {
+    reasons.push(`continuation BOS (${continuationDir}) \u2014 do not fade`);
+    return base(
+      pool2.id,
+      "run-through",
+      null,
+      true,
+      false,
+      true,
+      continuationShift.displacement,
+      reasons
+    );
+  }
+  reasons.push("sequence incomplete");
+  return base(pool2.id, "unconfirmed", null, true, reclaimed, false, 0, reasons);
+}
+function base(poolId, verdict, fadeDirection, swept, reclaimed, structureShifted, displacement, reasons) {
+  return {
+    poolId,
+    verdict,
+    fadeDirection,
+    swept,
+    reclaimed,
+    structureShifted,
+    displacement,
+    reasons
+  };
+}
+
 // server/modules/zenny/analysis/orchestrator.ts
 var TF_RANK = {
   "15m": 0,
@@ -4954,7 +5074,11 @@ async function runAnalysis(input) {
       regimeHistoryPerTimeframe: {},
       feedHealthPerTimeframe: {},
       tradePlan: null,
-      tradePlanResult: { primary: null, perTimeframe: {}, plansPerTimeframe: {} },
+      tradePlanResult: {
+        primary: null,
+        perTimeframe: {},
+        plansPerTimeframe: {}
+      },
       depth: null,
       orderFlow: null,
       computedAtMs: Date.now()
@@ -5004,8 +5128,7 @@ async function runAnalysis(input) {
     const liquidityCandidates = findLiquidityPools({
       symbol: input.symbol,
       timeframe: tf,
-      candles,
-      depletionCandles: primaryCandles
+      candles
     });
     for (const candidate of liquidityCandidates) {
       const rawIndex = findClosestCandleIndex(
@@ -5022,6 +5145,13 @@ async function runAnalysis(input) {
         recency,
         isPrimaryTimeframe: tf === input.primaryTimeframe
       });
+      const aliveness = checkPoolAliveness({
+        candles: primaryCandles,
+        startIndex: sourceIndexOnPrimary,
+        wickHigh: candidate.zoneHigh,
+        wickLow: candidate.zoneLow,
+        side: candidate.side
+      });
       pools.push({
         id: `pool-${candidate.kind}-${candidate.idSeed}`,
         symbol: input.symbol,
@@ -5034,13 +5164,13 @@ async function runAnalysis(input) {
         centreLine: (candidate.zoneHigh + candidate.zoneLow) / 2,
         birthCandleTime: candidate.sourceOpenTime,
         birthCandleIndexOnPrimary: sourceIndexOnPrimary,
-        sweptCandleTime: null,
-        sweptCandleIndexOnPrimary: null,
-        sweepReason: null,
-        deathCandleTime: null,
-        deathCandleIndexOnPrimary: null,
-        deathReason: null,
-        status: "active",
+        sweptCandleTime: aliveness.sweptCandleOpenTime,
+        sweptCandleIndexOnPrimary: aliveness.sweptCandleIndex,
+        sweepReason: aliveness.sweepReason,
+        deathCandleTime: aliveness.deathCandleOpenTime,
+        deathCandleIndexOnPrimary: aliveness.deathCandleIndex,
+        deathReason: aliveness.deathReason,
+        status: aliveness.status,
         confluenceCount: candidate.touchCount,
         strength,
         pull: null
@@ -5189,6 +5319,15 @@ async function runAnalysis(input) {
     dominantSide: "neither"
   };
   const primaryEnrichedPools = enrichedPoolsPerTimeframe[input.primaryTimeframe] ?? pools.map((p) => ({ ...p, pull: null }));
+  const primaryPivots = findBodyPivots({ candles: primaryCandles, n: pivotN });
+  const qualifiedPrimaryPools = primaryEnrichedPools.map((pool2) => ({
+    ...pool2,
+    qualification: qualifyPool({
+      pool: pool2,
+      candles: primaryCandles,
+      pivots: primaryPivots
+    })
+  }));
   const primaryRegimeHistory = regimeHistoryPerTimeframe[input.primaryTimeframe] ?? [];
   const regimeAssessment = regimeAssessmentPerTimeframe[input.primaryTimeframe] ? {
     primary: regimeAssessmentPerTimeframe[input.primaryTimeframe],
@@ -5200,7 +5339,7 @@ async function runAnalysis(input) {
     analysedTimeframes: analysedTfs,
     candles: primaryCandles,
     levels: passResult.levels,
-    pools: primaryEnrichedPools,
+    pools: qualifiedPrimaryPools,
     passInfo: passResult.passInfo,
     arms: primaryArms,
     armsPerTimeframe,

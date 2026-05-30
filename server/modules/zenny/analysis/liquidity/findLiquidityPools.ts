@@ -23,20 +23,18 @@ export interface FindLiquidityPoolsInput {
   symbol: string;
   timeframe: Timeframe;
   candles: Candle[];
-  depletionCandles?: Candle[];
 }
 
+// findLiquidityPools — pure DETECTOR. Identifies where wick-probe liquidity
+// pools are born, at their FULL zone (wick extreme → body line). It does NOT
+// decide whether a pool is still alive — depletion/sweep/death is the lifecycle
+// concern of checkPoolAliveness, run downstream against the trading-TF candles.
+// (Earlier this function shrank and deleted pools as later price consumed them,
+// which discarded the very sweep events the strategy needs to fade.)
 export function findLiquidityPools(
   input: FindLiquidityPoolsInput,
 ): LiquidityPoolCandidate[] {
-  return findDepletedWickPools(input);
-}
-
-function findDepletedWickPools(
-  input: FindLiquidityPoolsInput,
-): LiquidityPoolCandidate[] {
   const candles = input.candles;
-  const depletionCandles = input.depletionCandles ?? candles;
   if (candles.length < 2) return [];
 
   const ranges = candles.map((c) => c.high - c.low).filter((r) => r > 0);
@@ -45,8 +43,8 @@ function findDepletedWickPools(
   const medianRange = median(ranges);
   const candidates: LiquidityPoolCandidate[] = [];
 
-  // Last candle may still be forming. It can consume older liquidity but
-  // should not create a confirmed pool yet.
+  // Last candle may still be forming — it can sweep older pools (a lifecycle
+  // concern) but should not birth a confirmed pool yet.
   for (let sourceIndex = candles.length - 2; sourceIndex >= 0; sourceIndex--) {
     const candle = candles[sourceIndex];
     const range = candle.high - candle.low;
@@ -63,27 +61,19 @@ function findDepletedWickPools(
       upperProbe / range >= 0.28 &&
       isLocalRangeEdge(candles, sourceIndex, "RESISTANCE", 8, 2, 0.0008)
     ) {
-      const remaining = remainingResistanceZone({
-        zoneLow: highBody,
+      // Full zone: body top (the commitment line) → wick top (the extreme
+      // where stop liquidity rests).
+      candidates.push({
+        idSeed: `${input.symbol}-${input.timeframe}-wick-res-${sourceIndex}`,
+        kind: "pivot_probe",
+        side: "RESISTANCE",
+        targetPrice: highBody,
         zoneHigh: candle.high,
+        zoneLow: highBody,
         sourceIndex,
         sourceOpenTime: candle.openTime,
-        depletionCandles,
-        sameTimeframe: depletionCandles === candles,
+        touchCount: 1,
       });
-      if (remaining !== null) {
-        candidates.push({
-          idSeed: `${input.symbol}-${input.timeframe}-wick-res-${sourceIndex}`,
-          kind: "pivot_probe",
-          side: "RESISTANCE",
-          targetPrice: remaining.zoneLow,
-          zoneHigh: remaining.zoneHigh,
-          zoneLow: remaining.zoneLow,
-          sourceIndex,
-          sourceOpenTime: candle.openTime,
-          touchCount: 1,
-        });
-      }
     }
 
     if (
@@ -91,27 +81,18 @@ function findDepletedWickPools(
       lowerProbe / range >= 0.28 &&
       isLocalRangeEdge(candles, sourceIndex, "SUPPORT", 8, 2, 0.0008)
     ) {
-      const remaining = remainingSupportZone({
+      // Full zone: wick bottom (the extreme) → body bottom (the line).
+      candidates.push({
+        idSeed: `${input.symbol}-${input.timeframe}-wick-sup-${sourceIndex}`,
+        kind: "pivot_probe",
+        side: "SUPPORT",
+        targetPrice: lowBody,
         zoneHigh: lowBody,
         zoneLow: candle.low,
         sourceIndex,
         sourceOpenTime: candle.openTime,
-        depletionCandles,
-        sameTimeframe: depletionCandles === candles,
+        touchCount: 1,
       });
-      if (remaining !== null) {
-        candidates.push({
-          idSeed: `${input.symbol}-${input.timeframe}-wick-sup-${sourceIndex}`,
-          kind: "pivot_probe",
-          side: "SUPPORT",
-          targetPrice: remaining.zoneHigh,
-          zoneHigh: remaining.zoneHigh,
-          zoneLow: remaining.zoneLow,
-          sourceIndex,
-          sourceOpenTime: candle.openTime,
-          touchCount: 1,
-        });
-      }
     }
   }
 
@@ -120,54 +101,6 @@ function findDepletedWickPools(
       (a, b) => a.sourceIndex - b.sourceIndex,
     ),
   );
-}
-
-function remainingResistanceZone(zone: {
-    zoneLow: number;
-    zoneHigh: number;
-    sourceIndex: number;
-    sourceOpenTime: number;
-    depletionCandles: Candle[];
-    sameTimeframe: boolean;
-}): { zoneLow: number; zoneHigh: number } | null {
-  let remainingLow = zone.zoneLow;
-  const candlesToRight = zone.sameTimeframe
-    ? zone.depletionCandles.slice(zone.sourceIndex + 1)
-    : zone.depletionCandles.filter(
-        (candle) => candle.openTime > zone.sourceOpenTime,
-      );
-  for (const candle of candlesToRight) {
-    const high = candle.high;
-    if (high >= zone.zoneHigh) return null;
-    if (high > remainingLow) remainingLow = high;
-  }
-  return remainingLow < zone.zoneHigh
-    ? { zoneLow: remainingLow, zoneHigh: zone.zoneHigh }
-    : null;
-}
-
-function remainingSupportZone(zone: {
-    zoneLow: number;
-    zoneHigh: number;
-    sourceIndex: number;
-    sourceOpenTime: number;
-    depletionCandles: Candle[];
-    sameTimeframe: boolean;
-}): { zoneLow: number; zoneHigh: number } | null {
-  let remainingHigh = zone.zoneHigh;
-  const candlesToRight = zone.sameTimeframe
-    ? zone.depletionCandles.slice(zone.sourceIndex + 1)
-    : zone.depletionCandles.filter(
-        (candle) => candle.openTime > zone.sourceOpenTime,
-      );
-  for (const candle of candlesToRight) {
-    const low = candle.low;
-    if (low <= zone.zoneLow) return null;
-    if (low < remainingHigh) remainingHigh = low;
-  }
-  return zone.zoneLow < remainingHigh
-    ? { zoneLow: zone.zoneLow, zoneHigh: remainingHigh }
-    : null;
 }
 
 function isLocalRangeEdge(

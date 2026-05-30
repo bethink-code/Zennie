@@ -50,11 +50,49 @@ function buildSeries(): Candle[] {
   // back to 100, up to 108 (lower high), down to 92 (higher low),
   // settle around 100. Wicks deliberate so pivots are wick-confirmed.
   const path = [
-    100, 102, 105, 108, 110, 109, 107, 104, 102, 100, // → 110 high at idx 4
-    98, 95, 92, 90, 91, 93, 96, 98, 100, // → 90 low at idx 13
-    102, 105, 107, 108, 106, 104, 102, 100, // → 108 high at idx 22
-    98, 96, 94, 92, 93, 95, 97, 100, // → 92 low at idx 30
-    101, 102, 100, 99, 100, 101, 99, 100, // settle around 100
+    100,
+    102,
+    105,
+    108,
+    110,
+    109,
+    107,
+    104,
+    102,
+    100, // → 110 high at idx 4
+    98,
+    95,
+    92,
+    90,
+    91,
+    93,
+    96,
+    98,
+    100, // → 90 low at idx 13
+    102,
+    105,
+    107,
+    108,
+    106,
+    104,
+    102,
+    100, // → 108 high at idx 22
+    98,
+    96,
+    94,
+    92,
+    93,
+    95,
+    97,
+    100, // → 92 low at idx 30
+    101,
+    102,
+    100,
+    99,
+    100,
+    101,
+    99,
+    100, // settle around 100
   ];
   for (let i = 0; i < path.length; i++) {
     const close = path[i];
@@ -97,6 +135,34 @@ describe("runAnalysis (orchestrator integration)", () => {
     expect(typeof state.computedAtMs).toBe("number");
   });
 
+  it("stamps pool lifecycle via checkPoolAliveness — a raided pool comes out dead", async () => {
+    // idx1 has an upper wick (body 101 → wick 105): a RESISTANCE pool. Later
+    // price is ACCEPTED beyond the wick extreme (closes 106 > 105) → it must die.
+    const series: Candle[] = [
+      c(0, 100, 101, 99, 100),
+      c(1, 100, 105, 99, 101), // RESISTANCE pool: body 101, wick extreme 105
+      c(2, 101, 101.5, 100, 100.5),
+      c(3, 100.5, 101, 99.5, 100),
+      c(4, 100, 107, 99, 106), // close 106 > extreme 105 → death here
+      c(5, 106, 108, 105, 107),
+      c(6, 107, 109, 106, 108),
+      c(7, 108, 110, 107, 109), // last (forming) — no pool birth
+    ];
+    const provider = newProvider("BTCUSDT", series);
+    const state = await runAnalysis({
+      provider,
+      symbol: "BTCUSDT",
+      primaryTimeframe: "15m",
+    });
+
+    const deadPool = state.pools.find(
+      (p) => p.type === "RESISTANCE" && p.status === "dead",
+    );
+    expect(deadPool).toBeDefined();
+    expect(deadPool!.deathCandleIndexOnPrimary).not.toBeNull();
+    // Proves the wiring: it used to be dead code, leaving every pool active.
+  });
+
   it("produces wire angle output in passInfo with a Gann bracket", async () => {
     const provider = newProvider("BTCUSDT", buildSeries());
     const state = await runAnalysis({
@@ -111,9 +177,13 @@ describe("runAnalysis (orchestrator integration)", () => {
     expect(primary).toBeDefined();
     const wa = primary!.info;
     expect(typeof wa.angleDeg).toBe("number");
-    expect(["NO_TRADE", "ACCUMULATION", "RANGING", "TRENDING", "BREAKOUT"]).toContain(
-      wa.gannBracket,
-    );
+    expect([
+      "NO_TRADE",
+      "ACCUMULATION",
+      "RANGING",
+      "TRENDING",
+      "BREAKOUT",
+    ]).toContain(wa.gannBracket);
     expect(["up", "down", "flat"]).toContain(wa.direction);
     expect(wa.lookback).toBeGreaterThanOrEqual(2);
 
@@ -240,14 +310,19 @@ describe("runAnalysis (orchestrator integration)", () => {
           brokenPenalty: 0.15,
           strengthThreshold: 0,
         },
-        wireAngle: { enabled: false, lookbackCandles: 14, dwellBarsRequired: 3, volNormalisationK: 1 },
+        wireAngle: {
+          enabled: false,
+          lookbackCandles: 14,
+          dwellBarsRequired: 3,
+          volNormalisationK: 1,
+        },
       },
     });
 
     expect(state.passInfo.wireAngle).toBeUndefined();
   });
 
-  it("removes higher-timeframe pool remnants when primary candles fully raid them", async () => {
+  it("keeps higher-timeframe pools instead of deleting raided remnants (lifecycle replaces deletion)", async () => {
     const min = 60_000;
     const provider = new MockProvider();
     provider.setCandles("BTCUSDT", "1H", [
@@ -301,6 +376,10 @@ describe("runAnalysis (orchestrator integration)", () => {
         pool.wickHigh === 110,
     );
 
-    expect(oneHourPool).toBeUndefined();
+    // Old behaviour deleted this pool once primary candles raided it. Now the
+    // detector keeps the full-zone pool and checkPoolAliveness stamps its
+    // lifecycle — so it must be PRESENT with a valid status.
+    expect(oneHourPool).toBeDefined();
+    expect(["active", "swept", "dead"]).toContain(oneHourPool!.status);
   });
 });

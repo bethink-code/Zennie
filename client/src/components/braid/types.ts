@@ -164,6 +164,21 @@ export interface PoolPullClient {
   sEffectiveStandIn: number;
 }
 
+// Mirror of PoolQualification from
+// server/modules/zenny/decision/qualify/types.ts.
+export type PoolVerdictClient = "turning-point" | "run-through" | "unconfirmed";
+
+export interface PoolQualificationClient {
+  poolId: string;
+  verdict: PoolVerdictClient;
+  fadeDirection: "long" | "short" | null;
+  swept: boolean;
+  reclaimed: boolean;
+  structureShifted: boolean;
+  displacement: number;
+  reasons: string[];
+}
+
 export interface AnalysisPoolClient {
   id: string;
   symbol: string;
@@ -186,6 +201,7 @@ export interface AnalysisPoolClient {
   confluenceCount: number;
   strength: LevelStrengthClient;
   pull: PoolPullClient | null;
+  qualification?: PoolQualificationClient | null;
 }
 
 // Mirror of ExtractedArms from server/modules/zenny/analysis/arms/extractArms.ts.

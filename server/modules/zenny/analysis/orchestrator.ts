@@ -22,17 +22,12 @@ import {
 } from "../../../../shared/zennyTypes";
 import type { MarketDataProvider } from "../infrastructure/providers/providerInterface";
 import { getCandles } from "./data/getCandles";
-import {
-  findBodyPivots,
-  type BodyPivot,
-} from "./level/findBodyPivots";
+import { findBodyPivots, type BodyPivot } from "./level/findBodyPivots";
 import { isLevelBroken } from "./level/isLevelBroken";
 import { findBodyClusters } from "./level/findBodyClusters";
+import { levelStrength, type LevelStrength } from "./level/levelStrength";
 import {
-  levelStrength,
-  type LevelStrength,
-} from "./level/levelStrength";
-import {
+  checkPoolAliveness,
   type PoolStatus,
   type DeathReason,
   type SweepReason,
@@ -65,6 +60,8 @@ import type {
 } from "./regime/types";
 import { assembleTradePlans } from "../decision/assembleTradePlans";
 import type { TradePlan, TradePlanResult } from "../decision/types";
+import { qualifyPool } from "../decision/qualify/qualifyPool";
+import type { PoolQualification } from "../decision/qualify/types";
 
 // TF rank ordering — higher number = higher (slower) timeframe. Used to
 // filter pools per-TF: a TF chart should consider only pools at or above
@@ -146,6 +143,10 @@ export interface AnalysisPool {
   // current price. Null for non-active pools and when the primary TF
   // has no candles. Populated once after all pools are formed.
   pull: PoolPull | null;
+  // Step 1 of the regime-scoped strategy: turning-point / run-through /
+  // unconfirmed verdict from the verified sweep→reclaim→structure-shift
+  // sequence. Optional — populated only on the serialized primary-TF pools.
+  qualification?: PoolQualification | null;
 }
 
 export interface AnalysisState {
@@ -256,8 +257,7 @@ export async function runAnalysis(
     analysedTfs.push(tf);
   }
 
-  const primaryCandles =
-    perTfCandles.get(input.primaryTimeframe) ?? [];
+  const primaryCandles = perTfCandles.get(input.primaryTimeframe) ?? [];
 
   if (primaryCandles.length === 0) {
     return {
@@ -275,7 +275,11 @@ export async function runAnalysis(
       regimeHistoryPerTimeframe: {},
       feedHealthPerTimeframe: {},
       tradePlan: null,
-      tradePlanResult: { primary: null, perTimeframe: {}, plansPerTimeframe: {} },
+      tradePlanResult: {
+        primary: null,
+        perTimeframe: {},
+        plansPerTimeframe: {},
+      },
       depth: null,
       orderFlow: null,
       computedAtMs: Date.now(),
@@ -302,9 +306,7 @@ export async function runAnalysis(
       // lower TF can sit between two primary candles or beyond the last
       // one — render it at the nearest edge so the X coordinate is valid.
       const swingCandleIndexOnPrimary =
-        rawIndex < 0
-          ? -1
-          : Math.min(rawIndex, primaryCandles.length - 1);
+        rawIndex < 0 ? -1 : Math.min(rawIndex, primaryCandles.length - 1);
       const recency =
         swingCandleIndexOnPrimary < 0
           ? 0
@@ -351,7 +353,6 @@ export async function runAnalysis(
       symbol: input.symbol,
       timeframe: tf,
       candles,
-      depletionCandles: primaryCandles,
     });
 
     for (const candidate of liquidityCandidates) {
@@ -373,6 +374,20 @@ export async function runAnalysis(
         recency,
         isPrimaryTimeframe: tf === input.primaryTimeframe,
       });
+      // Lifecycle: walk the primary (trading-TF) candles after the pool's
+      // birth to stamp active → swept → dead. The detector emits full zones;
+      // this is where sweep/death actually get decided. Returned indices are
+      // in primary-candle space, so they map straight onto the *OnPrimary
+      // fields. When birth predates the window (sourceIndexOnPrimary = -1),
+      // startIndex = -1 walks from candle 0 — the whole visible window is
+      // "after birth", which is the best available read for an HTF pool.
+      const aliveness = checkPoolAliveness({
+        candles: primaryCandles,
+        startIndex: sourceIndexOnPrimary,
+        wickHigh: candidate.zoneHigh,
+        wickLow: candidate.zoneLow,
+        side: candidate.side,
+      });
       pools.push({
         id: `pool-${candidate.kind}-${candidate.idSeed}`,
         symbol: input.symbol,
@@ -385,13 +400,13 @@ export async function runAnalysis(
         centreLine: (candidate.zoneHigh + candidate.zoneLow) / 2,
         birthCandleTime: candidate.sourceOpenTime,
         birthCandleIndexOnPrimary: sourceIndexOnPrimary,
-        sweptCandleTime: null,
-        sweptCandleIndexOnPrimary: null,
-        sweepReason: null,
-        deathCandleTime: null,
-        deathCandleIndexOnPrimary: null,
-        deathReason: null,
-        status: "active",
+        sweptCandleTime: aliveness.sweptCandleOpenTime,
+        sweptCandleIndexOnPrimary: aliveness.sweptCandleIndex,
+        sweepReason: aliveness.sweepReason,
+        deathCandleTime: aliveness.deathCandleOpenTime,
+        deathCandleIndexOnPrimary: aliveness.deathCandleIndex,
+        deathReason: aliveness.deathReason,
+        status: aliveness.status,
         confluenceCount: candidate.touchCount,
         strength,
         pull: null,
@@ -443,8 +458,7 @@ export async function runAnalysis(
           ? 0
           : Math.min(
               1,
-              lastTouchPrimaryIdx /
-                Math.max(1, primaryCandles.length - 1),
+              lastTouchPrimaryIdx / Math.max(1, primaryCandles.length - 1),
             );
 
       const strengthClus = levelStrength({
@@ -500,7 +514,8 @@ export async function runAnalysis(
   //      trading environment.
   const wireAngle = passResult.passInfo.wireAngle;
   const armsPerTimeframe: Partial<Record<Timeframe, ExtractedArms>> = {};
-  const enrichedPoolsPerTimeframe: Partial<Record<Timeframe, AnalysisPool[]>> = {};
+  const enrichedPoolsPerTimeframe: Partial<Record<Timeframe, AnalysisPool[]>> =
+    {};
   const regimeAssessmentPerTimeframe: Partial<
     Record<Timeframe, TfRegimeAssessment>
   > = {};
@@ -600,19 +615,20 @@ export async function runAnalysis(
   //    a playbook, build a concrete TradePlan (entry/stop/target/side/
   //    size/rationale). Pure derivation from regime assessment + arms +
   //    pools; no order placement happens here.
-  const tradePlanResult: TradePlanResult =
-    regimeAssessmentPerTimeframe[input.primaryTimeframe]
-      ? assembleTradePlans({
-          primaryTimeframe: input.primaryTimeframe,
-          perTfCandles,
-          armsPerTimeframe,
-          enrichedPoolsPerTimeframe,
-          regimeAssessment: {
-            primary: regimeAssessmentPerTimeframe[input.primaryTimeframe]!,
-            perTimeframe: regimeAssessmentPerTimeframe,
-          },
-        })
-      : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
+  const tradePlanResult: TradePlanResult = regimeAssessmentPerTimeframe[
+    input.primaryTimeframe
+  ]
+    ? assembleTradePlans({
+        primaryTimeframe: input.primaryTimeframe,
+        perTfCandles,
+        armsPerTimeframe,
+        enrichedPoolsPerTimeframe,
+        regimeAssessment: {
+          primary: regimeAssessmentPerTimeframe[input.primaryTimeframe]!,
+          perTimeframe: regimeAssessmentPerTimeframe,
+        },
+      })
+    : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
 
   // Top-level convenience fields — alias the primary TF's per-TF entries
   // so existing consumers (right-frame canvas, current strip render) keep
@@ -625,6 +641,21 @@ export async function runAnalysis(
   const primaryEnrichedPools =
     enrichedPoolsPerTimeframe[input.primaryTimeframe] ??
     pools.map((p) => ({ ...p, pull: null }));
+
+  // Pool qualification (Step 1 of the regime-scoped strategy): tag each pool
+  // turning-point / run-through / unconfirmed via the verified sweep→reclaim→
+  // structure-shift sequence, against the primary TF's candles + swing pivots
+  // (pools carry sweptCandleIndexOnPrimary). Surfaces on the chart for eyeball
+  // verification before it gates live trades.
+  const primaryPivots = findBodyPivots({ candles: primaryCandles, n: pivotN });
+  const qualifiedPrimaryPools = primaryEnrichedPools.map((pool) => ({
+    ...pool,
+    qualification: qualifyPool({
+      pool,
+      candles: primaryCandles,
+      pivots: primaryPivots,
+    }),
+  }));
   const primaryRegimeHistory =
     regimeHistoryPerTimeframe[input.primaryTimeframe] ?? [];
   const regimeAssessment: RegimeAssessmentResult | null =
@@ -641,7 +672,7 @@ export async function runAnalysis(
     analysedTimeframes: analysedTfs,
     candles: primaryCandles,
     levels: passResult.levels,
-    pools: primaryEnrichedPools,
+    pools: qualifiedPrimaryPools,
     passInfo: passResult.passInfo,
     arms: primaryArms,
     armsPerTimeframe,
@@ -688,10 +719,7 @@ function clusterTolerancePct(tf: Timeframe): number {
 // Map a candle openTime into the primary TF's index space so the renderer
 // has a clean X coordinate. Returns -1 if the time predates the visible
 // window (renderer clips to left edge).
-function findClosestCandleIndex(
-  candles: Candle[],
-  openTime: number,
-): number {
+function findClosestCandleIndex(candles: Candle[], openTime: number): number {
   if (candles.length === 0) return 0;
   if (openTime < candles[0].openTime) return -1;
   if (openTime > candles[candles.length - 1].openTime) return candles.length;
