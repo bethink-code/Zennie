@@ -82,6 +82,9 @@ interface Props {
   showPools?: boolean;
   showSweptPools?: boolean;
   showDeadPools?: boolean;
+  // "Taken" = an active pool price has CLOSED past its body line (liquidity
+  // consumed). Off → hidden (declutter); on → drawn very faintly. Render-only.
+  showTakenPools?: boolean;
   height?: number;
   // Aggregate strength threshold — levels with passes.aggregate.score
   // below this are hidden from the chart entirely (and their pools too).
@@ -136,6 +139,7 @@ export function LeftFrameCanvas({
   showPools = true,
   showSweptPools = false,
   showDeadPools = false,
+  showTakenPools = false,
   height: H = DEFAULT_H,
   strengthThreshold = 0,
   showRegimeStrip = false,
@@ -212,6 +216,7 @@ export function LeftFrameCanvas({
       showPools,
       showSweptPools,
       showDeadPools,
+      showTakenPools,
       chartType,
       monochromeCandles,
       targetPoints,
@@ -222,6 +227,7 @@ export function LeftFrameCanvas({
     showPools,
     showSweptPools,
     showDeadPools,
+    showTakenPools,
     chartType,
     monochromeCandles,
     targetPoints,
@@ -985,6 +991,7 @@ function drawCanvas(
     showPools: boolean;
     showSweptPools: boolean;
     showDeadPools: boolean;
+    showTakenPools: boolean;
     chartType: "candles" | "line";
     monochromeCandles: boolean;
     targetPoints: number;
@@ -1032,11 +1039,22 @@ function drawCanvas(
     const yBot = dims.toY(pool.wickLow);
     return !(yBot < PAD.t || yTop > PAD.t + dims.ch);
   };
+  // Active pools split into LIVE (untouched) and TAKEN (price has closed past
+  // the body line — liquidity consumed). Taken pools used to be deleted by the
+  // detector; now they persist (the strategy needs pools kept), so we treat
+  // "taken" as a render concern: hidden by default, very faint when toggled on.
+  const activeRenderable = state.pools.filter(
+    (p) => p.status === "active" && renderablePool(p),
+  );
   const activePools = opts.showPools
     ? selectPoolsForRender(
-        state.pools.filter((p) => p.status === "active" && renderablePool(p)),
+        activeRenderable.filter((p) => !isTakenPool(p, state.candles)),
       )
     : [];
+  const takenPools =
+    opts.showPools && opts.showTakenPools
+      ? activeRenderable.filter((p) => isTakenPool(p, state.candles))
+      : [];
   const sweptPools =
     opts.showPools && opts.showSweptPools
       ? selectPoolsForRender(
@@ -1122,6 +1140,23 @@ function drawCanvas(
     ctx.fillStyle = `rgba(${rgb},0.11)`;
     ctx.fillRect(x1, yTop, x2 - x1, yBot - yTop);
     ctx.strokeStyle = `rgba(${rgb},0.52)`;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x1, yTop, x2 - x1, yBot - yTop);
+  }
+
+  // Taken pools — only when toggled on, and a mere trace so they never compete
+  // with live pools for attention.
+  for (const pool of takenPools) {
+    const yTop = dims.toY(pool.wickHigh);
+    const yBot = dims.toY(pool.wickLow);
+    const idx = pool.birthCandleIndexOnPrimary;
+    const x1 =
+      idx < 0 ? PAD.l : dims.toX(Math.max(0, Math.min(dims.N - 1, idx)));
+    const x2 = PAD.l + dims.cw;
+    const rgb = pool.type === "RESISTANCE" ? "226,75,74" : "29,158,117";
+    ctx.fillStyle = `rgba(${rgb},0.02)`;
+    ctx.fillRect(x1, yTop, x2 - x1, yBot - yTop);
+    ctx.strokeStyle = `rgba(${rgb},0.08)`;
     ctx.lineWidth = 1;
     ctx.strokeRect(x1, yTop, x2 - x1, yBot - yTop);
   }
@@ -1398,6 +1433,25 @@ function formatPrice(p: number): string {
   if (p >= 1_000) return "$" + p.toFixed(0);
   if (p >= 1) return "$" + p.toFixed(2);
   return "$" + p.toFixed(4);
+}
+
+// A pool is "taken" once any candle after its birth CLOSES past its body line
+// (RESISTANCE: close above; SUPPORT: close below) — the liquidity has been
+// consumed even if the pool hasn't structurally died at the wick extreme.
+function isTakenPool(
+  pool: AnalysisStateClient["pools"][number],
+  candles: AnalysisStateClient["candles"],
+): boolean {
+  for (
+    let i = Math.max(0, pool.birthCandleIndexOnPrimary + 1);
+    i < candles.length;
+    i++
+  ) {
+    const close = candles[i].close;
+    if (pool.type === "RESISTANCE" && close > pool.linePrice) return true;
+    if (pool.type === "SUPPORT" && close < pool.linePrice) return true;
+  }
+  return false;
 }
 
 function selectPoolsForRender<T extends AnalysisStateClient["pools"][number]>(

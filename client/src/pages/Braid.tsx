@@ -8,15 +8,24 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { LeftFrameCanvas } from "@/components/braid/LeftFrameCanvas";
 import { NowColumn } from "@/components/braid/NowColumn";
-import { LevelsColumnCollapsed, LevelsColumnExpanded } from "@/components/braid/LevelsColumn";
-import { NowBadgeCollapsed, NowBadgeExpanded } from "@/components/braid/NowBadge";
+import {
+  LevelsColumnCollapsed,
+  LevelsColumnExpanded,
+} from "@/components/braid/LevelsColumn";
+import {
+  NowBadgeCollapsed,
+  NowBadgeExpanded,
+} from "@/components/braid/NowBadge";
 import { OrderFlowColumn } from "@/components/braid/OrderFlowColumn";
 import {
   OrdersStrategyColumnCollapsed,
   OrdersStrategyColumnExpanded,
 } from "@/components/braid/OrdersStrategyColumn";
 import { RightFrameCanvas } from "@/components/braid/RightFrameCanvas";
-import { TradesColumnCollapsed, TradesColumnExpanded } from "@/components/braid/TradesColumn";
+import {
+  TradesColumnCollapsed,
+  TradesColumnExpanded,
+} from "@/components/braid/TradesColumn";
 import { LiqOverlay } from "@/components/braid/LiqOverlay";
 import { TradeOverlay } from "@/components/braid/TradeOverlay";
 import { ColumnInnerTabs } from "@/components/braid/ColumnInnerTabs";
@@ -28,9 +37,7 @@ import type {
   AnalysisStateClient,
   PassConfigClient,
 } from "@/components/braid/types";
-import {
-  getDefaultPassConfigForTimeframeClient,
-} from "@/components/braid/types";
+import { getDefaultPassConfigForTimeframeClient } from "@/components/braid/types";
 import { computePriceRange, CHART_PAD } from "@/components/braid/chartGeometry";
 import {
   resolveChartView,
@@ -88,11 +95,17 @@ function usePersistedState<T>(key: string, defaultValue: T) {
     try {
       const stored = localStorage.getItem(key);
       if (stored !== null) return JSON.parse(stored) as T;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return defaultValue;
   });
   useEffect(() => {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* ignore */
+    }
   }, [key, value]);
   return [value, setValue] as const;
 }
@@ -116,32 +129,79 @@ const VIEW_LABEL: Record<ChartScope, string> = {
 
 export default function Braid() {
   const { user } = useAuth();
-  const [symbol, setSymbol] = usePersistedState("zenny.braid.symbol", "BTCUSDT");
-  const [timeframe, setTimeframe] = usePersistedState<Timeframe>("zenny.braid.timeframe", DEFAULT_BRAID_TIMEFRAME);
-  const [count, setCount] = usePersistedState("zenny.braid.count", DEFAULT_BRAID_COUNT);
-  const [chartType, setChartType] = usePersistedState<"candles" | "line">("zenny.braid.chartType", "candles");
-  const [targetPointsByTf, setTargetPointsByTf] = usePersistedState<Record<string, number>>(
-    "zenny.braid.targetPointsByTf",
-    { M: 40, W: 25, D: 30, "4H": 25, "1H": 25, "15m": 30 },
+  const [symbol, setSymbol] = usePersistedState(
+    "zenny.braid.symbol",
+    "BTCUSDT",
   );
+  const [timeframe, setTimeframe] = usePersistedState<Timeframe>(
+    "zenny.braid.timeframe",
+    DEFAULT_BRAID_TIMEFRAME,
+  );
+  const [count, setCount] = usePersistedState(
+    "zenny.braid.count",
+    DEFAULT_BRAID_COUNT,
+  );
+  const [chartType, setChartType] = usePersistedState<"candles" | "line">(
+    "zenny.braid.chartType",
+    "candles",
+  );
+  const [targetPointsByTf, setTargetPointsByTf] = usePersistedState<
+    Record<string, number>
+  >("zenny.braid.targetPointsByTf", {
+    M: 40,
+    W: 25,
+    D: 30,
+    "4H": 25,
+    "1H": 25,
+    "15m": 30,
+  });
   const targetPoints = targetPointsByTf[timeframe] ?? 15;
-  const setTargetPoints = (v: number) => setTargetPointsByTf({ ...targetPointsByTf, [timeframe]: v });
-  const [showCurrentTf, setShowCurrentTf] = usePersistedState("zenny.braid.showCurrentTf", true);
-  const [showOtherTfs, setShowOtherTfs] = usePersistedState("zenny.braid.showOtherTfs", true);
-  const [showPools, setShowPools] = usePersistedState("zenny.braid.showPools", true);
-  const [showSweptPools, setShowSweptPools] = usePersistedState("zenny.braid.showSweptPools", false);
-  const [showDeadPools, setShowDeadPools] = usePersistedState("zenny.braid.showDeadPools", false);
+  const setTargetPoints = (v: number) =>
+    setTargetPointsByTf({ ...targetPointsByTf, [timeframe]: v });
+  const [showCurrentTf, setShowCurrentTf] = usePersistedState(
+    "zenny.braid.showCurrentTf",
+    true,
+  );
+  const [showOtherTfs, setShowOtherTfs] = usePersistedState(
+    "zenny.braid.showOtherTfs",
+    true,
+  );
+  const [showPools, setShowPools] = usePersistedState(
+    "zenny.braid.showPools",
+    true,
+  );
+  const [showSweptPools, setShowSweptPools] = usePersistedState(
+    "zenny.braid.showSweptPools",
+    false,
+  );
+  const [showDeadPools, setShowDeadPools] = usePersistedState(
+    "zenny.braid.showDeadPools",
+    false,
+  );
+  const [showTakenPools, setShowTakenPools] = usePersistedState(
+    "zenny.braid.showTakenPools",
+    false,
+  );
   const [showTradingAreas, setShowTradingAreas] = usePersistedState(
     "zenny.braid.showTradingAreas",
     false,
   );
-  const [showSwingMarkers, setShowSwingMarkers] = usePersistedState("zenny.braid.showSwingMarkers", false);
-  const [maxLevelsPerSide, setMaxLevelsPerSide] = usePersistedState("zenny.braid.maxLevelsPerSide", 0);
+  const [showSwingMarkers, setShowSwingMarkers] = usePersistedState(
+    "zenny.braid.showSwingMarkers",
+    false,
+  );
+  const [maxLevelsPerSide, setMaxLevelsPerSide] = usePersistedState(
+    "zenny.braid.maxLevelsPerSide",
+    0,
+  );
   const [rightFrameCandleCount, setRightFrameCandleCount] = usePersistedState(
     "zenny.braid.rightFrameCandleCount",
     25,
   );
-  const [showLiqHeatmap, setShowLiqHeatmap] = usePersistedState("zenny.braid.showLiqHeatmap", true);
+  const [showLiqHeatmap, setShowLiqHeatmap] = usePersistedState(
+    "zenny.braid.showLiqHeatmap",
+    true,
+  );
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [lastTickSummary, setLastTickSummary] = useState<string | null>(null);
 
@@ -169,6 +229,7 @@ export default function Braid() {
     showPools,
     showSweptPools,
     showDeadPools,
+    showTakenPools,
     showLevels: true,
     showRegimeStrip: false,
     showOrderPlans: showTradingAreas,
@@ -178,7 +239,10 @@ export default function Braid() {
 
   // Liq overlay (separate from column expand)
   const [liqOverlayOpen, setLiqOverlayOpen] = useState(false);
-  const [decayFactor, setDecayFactor] = usePersistedState("zenny.braid.decayFactor", 0.7);
+  const [decayFactor, setDecayFactor] = usePersistedState(
+    "zenny.braid.decayFactor",
+    0.7,
+  );
 
   // Pass playground — multi-pass annotations on each level (recency,
   // touchCount, lastLeg, …). Persisted so a refresh keeps your tuning state.
@@ -267,9 +331,12 @@ export default function Braid() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Chart height: fill viewport minus header (~52px) and stats bar (~36px)
-  const [chartHeight, setChartHeight] = useState(Math.max(400, window.innerHeight - 90));
+  const [chartHeight, setChartHeight] = useState(
+    Math.max(400, window.innerHeight - 90),
+  );
   useEffect(() => {
-    const onResize = () => setChartHeight(Math.max(400, window.innerHeight - 90));
+    const onResize = () =>
+      setChartHeight(Math.max(400, window.innerHeight - 90));
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -297,10 +364,13 @@ export default function Braid() {
       return r.json();
     },
     onSuccess: (payload: any) => {
-      const results: any[] = Array.isArray(payload?.results) ? payload.results : [];
+      const results: any[] = Array.isArray(payload?.results)
+        ? payload.results
+        : [];
       const created = results.filter((r: any) => r?.newPositionId).length;
       const transitions = results.reduce(
-        (n: number, r: any) => n + (Array.isArray(r?.transitions) ? r.transitions.length : 0),
+        (n: number, r: any) =>
+          n + (Array.isArray(r?.transitions) ? r.transitions.length : 0),
         0,
       );
       const blocked = results
@@ -319,14 +389,25 @@ export default function Braid() {
     },
     onError: (err) => {
       setLastTickSummary(
-        err instanceof Error ? `Paper tick failed: ${err.message}` : "Paper tick failed",
+        err instanceof Error
+          ? `Paper tick failed: ${err.message}`
+          : "Paper tick failed",
       );
     },
   });
 
   const coin = symbol.replace(/USDT$/i, "").toLowerCase();
-  const { data: liqData, isFetching: liqFetching } = useQuery<{ levels: Array<{ barTime: number; side: "long" | "short"; tier: number; price: number }> }>({
-    queryKey: [`/api/hyblock/liq-levels?coin=${coin}&startTime=0&endTime=9999999999999`],
+  const { data: liqData, isFetching: liqFetching } = useQuery<{
+    levels: Array<{
+      barTime: number;
+      side: "long" | "short";
+      tier: number;
+      price: number;
+    }>;
+  }>({
+    queryKey: [
+      `/api/hyblock/liq-levels?coin=${coin}&startTime=0&endTime=9999999999999`,
+    ],
     enabled: !!data,
   });
 
@@ -336,11 +417,14 @@ export default function Braid() {
     : { priceMin: 0, priceMax: 0, priceRange: 0 };
 
   // Mark price Y — last candle close, same toY as chart
-  const lastClose = data?.candles.length ? data.candles[data.candles.length - 1].close : 0;
+  const lastClose = data?.candles.length
+    ? data.candles[data.candles.length - 1].close
+    : 0;
   const plotH = chartHeight - CHART_PAD.t - CHART_PAD.b;
-  const markPriceY = priceRange > 0
-    ? CHART_PAD.t + plotH * (1 - (lastClose - priceMin) / priceRange)
-    : undefined;
+  const markPriceY =
+    priceRange > 0
+      ? CHART_PAD.t + plotH * (1 - (lastClose - priceMin) / priceRange)
+      : undefined;
   const showOrdersLiqOverlay =
     ordersExpanded && showLiqHeatmap && liqOverlayOpen;
   const tradingViewFlag =
@@ -357,6 +441,7 @@ export default function Braid() {
     chartView.showPools ? "Pools" : null,
     chartView.showPools && chartView.showSweptPools ? "Swept" : null,
     chartView.showPools && chartView.showDeadPools ? "Dead" : null,
+    chartView.showPools && chartView.showTakenPools ? "Taken" : null,
     chartView.showRegimeStrip ? "Regime" : null,
     tradingViewFlag,
     showOrdersLiqOverlay ? "Liq" : null,
@@ -406,9 +491,7 @@ export default function Braid() {
           <span className="text-[#888780]">Style</span>
           <select
             value={chartType}
-            onChange={(e) =>
-              setChartType(e.target.value as "candles" | "line")
-            }
+            onChange={(e) => setChartType(e.target.value as "candles" | "line")}
             className="border border-black/15 rounded px-2 py-1 bg-white text-sm"
           >
             <option value="candles">Candles</option>
@@ -457,6 +540,12 @@ export default function Braid() {
             label="Dead"
             checked={showDeadPools}
             onChange={setShowDeadPools}
+            disabled={!showPools}
+          />
+          <ToggleSetting
+            label="Taken"
+            checked={showTakenPools}
+            onChange={setShowTakenPools}
             disabled={!showPools}
           />
           <ToggleSetting
@@ -532,7 +621,8 @@ export default function Braid() {
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
             onBlur={(e) => setSymbol(normaliseSymbol(e.target.value))}
             onKeyDown={(e) => {
-              if (e.key === "Enter") setSymbol(normaliseSymbol(e.currentTarget.value));
+              if (e.key === "Enter")
+                setSymbol(normaliseSymbol(e.currentTarget.value));
             }}
             className="border border-black/15 rounded px-2 py-0.5 w-28 bg-white text-sm"
             aria-label="Trading pair"
@@ -564,19 +654,27 @@ export default function Braid() {
             {activeViewFlags.length > 0 && (
               <span>{activeViewFlags.join(" / ")}</span>
             )}
-            {liqFetching && <span title="Loading Hyblock liq levels">Liq ...</span>}
-            {!liqFetching && liqData?.levels && liqData.levels.length > 0 && (() => {
-              const latestMs = liqData.levels.reduce((m, l) => Math.max(m, l.barTime), 0);
-              const ageDays = Math.floor((Date.now() - latestMs) / 86400000);
-              return (
-                <span
-                  style={{ color: ageDays >= 1 ? "#c97a2c" : "#888780" }}
-                  title={`Hyblock liq cutoff: ${new Date(latestMs).toISOString().slice(0, 10)}`}
-                >
-                  Liq {ageDays}d
-                </span>
-              );
-            })()}
+            {liqFetching && (
+              <span title="Loading Hyblock liq levels">Liq ...</span>
+            )}
+            {!liqFetching &&
+              liqData?.levels &&
+              liqData.levels.length > 0 &&
+              (() => {
+                const latestMs = liqData.levels.reduce(
+                  (m, l) => Math.max(m, l.barTime),
+                  0,
+                );
+                const ageDays = Math.floor((Date.now() - latestMs) / 86400000);
+                return (
+                  <span
+                    style={{ color: ageDays >= 1 ? "#c97a2c" : "#888780" }}
+                    title={`Hyblock liq cutoff: ${new Date(latestMs).toISOString().slice(0, 10)}`}
+                  >
+                    Liq {ageDays}d
+                  </span>
+                );
+              })()}
             {lastTickSummary && (
               <span className="max-w-[260px] truncate" title={lastTickSummary}>
                 {lastTickSummary}
@@ -676,6 +774,7 @@ export default function Braid() {
                 showPools={chartView.showPools}
                 showSweptPools={chartView.showSweptPools}
                 showDeadPools={chartView.showDeadPools}
+                showTakenPools={chartView.showTakenPools}
                 showLevels={chartView.showLevels}
                 showSwingMarkers={showSwingMarkers}
                 maxLevelsPerSide={maxLevelsPerSide}
@@ -708,7 +807,9 @@ export default function Braid() {
               <TradeOverlay
                 candles={data.candles}
                 plans={chartView.showOrderPlans ? primaryPlans : []}
-                positions={chartView.showPaperTrades ? paperFilledPositions : []}
+                positions={
+                  chartView.showPaperTrades ? paperFilledPositions : []
+                }
                 priceMin={priceMin}
                 priceMax={priceMax}
                 padLeft={CHART_PAD.l}
@@ -720,9 +821,18 @@ export default function Braid() {
               {showOrdersLiqOverlay && (
                 <div className="absolute bottom-2 left-16 flex items-center gap-2 bg-white/90 rounded px-3 py-1 border border-black/10 z-20">
                   <span className="text-[#888780] text-xs">Decay</span>
-                  <input type="range" min={0} max={1} step={0.05} value={decayFactor}
-                    onChange={(e) => setDecayFactor(parseFloat(e.target.value))} className="w-32" />
-                  <span className="text-xs text-[#888780] w-8 tabular-nums">{decayFactor.toFixed(2)}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={decayFactor}
+                    onChange={(e) => setDecayFactor(parseFloat(e.target.value))}
+                    className="w-32"
+                  />
+                  <span className="text-xs text-[#888780] w-8 tabular-nums">
+                    {decayFactor.toFixed(2)}
+                  </span>
                 </div>
               )}
             </div>
@@ -934,7 +1044,8 @@ export default function Braid() {
           </span>
           <span>TFs: {data.analysedTimeframes.join("/")}</span>
           <span className="ml-auto text-[#3d3d3a] font-medium">
-            {data.candles.length > 0 && `$${data.candles[data.candles.length - 1].close.toLocaleString()}`}
+            {data.candles.length > 0 &&
+              `$${data.candles[data.candles.length - 1].close.toLocaleString()}`}
           </span>
         </div>
       )}
@@ -1005,7 +1116,8 @@ function OrderFlowExpandedContent({
   priceMin: number;
   priceMax: number;
 }) {
-  const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
+  const currentPrice =
+    candles.length > 0 ? candles[candles.length - 1].close : 0;
 
   return (
     <div style={{ fontSize: 11, color: "#3d3d3a" }}>
@@ -1014,8 +1126,13 @@ function OrderFlowExpandedContent({
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Open Interest</div>
           <div>Value: ${(orderFlow.oi.valueUsd / 1e9).toFixed(2)}B</div>
           {orderFlow.oi.change24hPct != null && (
-            <div style={{ color: orderFlow.oi.change24hPct >= 0 ? "#1d9e75" : "#e24b4a" }}>
-              24h: {orderFlow.oi.change24hPct >= 0 ? "+" : ""}{orderFlow.oi.change24hPct.toFixed(1)}%
+            <div
+              style={{
+                color: orderFlow.oi.change24hPct >= 0 ? "#1d9e75" : "#e24b4a",
+              }}
+            >
+              24h: {orderFlow.oi.change24hPct >= 0 ? "+" : ""}
+              {orderFlow.oi.change24hPct.toFixed(1)}%
             </div>
           )}
         </div>
@@ -1023,35 +1140,85 @@ function OrderFlowExpandedContent({
       {orderFlow?.funding && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Funding Rate</div>
-          <div style={{ color: orderFlow.funding.rate > 0 ? "#1d9e75" : "#e24b4a" }}>
-            {(orderFlow.funding.rate * 100).toFixed(4)}% ({orderFlow.funding.annualizedPct.toFixed(1)}% ann.)
+          <div
+            style={{
+              color: orderFlow.funding.rate > 0 ? "#1d9e75" : "#e24b4a",
+            }}
+          >
+            {(orderFlow.funding.rate * 100).toFixed(4)}% (
+            {orderFlow.funding.annualizedPct.toFixed(1)}% ann.)
           </div>
-          <div style={{ color: "#888780" }}>Mark: ${orderFlow.funding.markPrice.toLocaleString()}</div>
+          <div style={{ color: "#888780" }}>
+            Mark: ${orderFlow.funding.markPrice.toLocaleString()}
+          </div>
         </div>
       )}
       {orderFlow?.longShort && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Long/Short Ratio</div>
-          <div>{orderFlow.longShort.ratio.toFixed(2)} ({(orderFlow.longShort.longPct * 100).toFixed(0)}% L / {(orderFlow.longShort.shortPct * 100).toFixed(0)}% S)</div>
-          <div className="flex mt-1" style={{ height: 6, borderRadius: 3, overflow: "hidden" }}>
-            <div style={{ width: `${orderFlow.longShort.longPct * 100}%`, background: "rgba(29,158,117,0.6)" }} />
-            <div style={{ width: `${orderFlow.longShort.shortPct * 100}%`, background: "rgba(226,75,74,0.6)" }} />
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            Long/Short Ratio
+          </div>
+          <div>
+            {orderFlow.longShort.ratio.toFixed(2)} (
+            {(orderFlow.longShort.longPct * 100).toFixed(0)}% L /{" "}
+            {(orderFlow.longShort.shortPct * 100).toFixed(0)}% S)
+          </div>
+          <div
+            className="flex mt-1"
+            style={{ height: 6, borderRadius: 3, overflow: "hidden" }}
+          >
+            <div
+              style={{
+                width: `${orderFlow.longShort.longPct * 100}%`,
+                background: "rgba(29,158,117,0.6)",
+              }}
+            />
+            <div
+              style={{
+                width: `${orderFlow.longShort.shortPct * 100}%`,
+                background: "rgba(226,75,74,0.6)",
+              }}
+            />
           </div>
         </div>
       )}
       {liqLevels && liqLevels.length > 0 && (
         <div>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Nearest Liq Levels</div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            Nearest Liq Levels
+          </div>
           <div style={{ fontSize: 10, color: "#888780", marginBottom: 4 }}>
             Closest unconsumed levels to ${currentPrice.toLocaleString()}
           </div>
-          {getNearestLevels(liqLevels, currentPrice, priceMin, priceMax).map((l, i) => (
-            <div key={i} className="flex justify-between" style={{ padding: "1px 0", color: l.side === "long" ? "#1d9e75" : "#e24b4a" }}>
-              <span>{l.side === "long" ? "Long" : "Short"} T{l.tier}</span>
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>${l.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-              <span style={{ color: "#888780" }}>{((Math.abs(l.price - currentPrice) / currentPrice) * 100).toFixed(1)}%</span>
-            </div>
-          ))}
+          {getNearestLevels(liqLevels, currentPrice, priceMin, priceMax).map(
+            (l, i) => (
+              <div
+                key={i}
+                className="flex justify-between"
+                style={{
+                  padding: "1px 0",
+                  color: l.side === "long" ? "#1d9e75" : "#e24b4a",
+                }}
+              >
+                <span>
+                  {l.side === "long" ? "Long" : "Short"} T{l.tier}
+                </span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  $
+                  {l.price.toLocaleString(undefined, {
+                    maximumFractionDigits: 0,
+                  })}
+                </span>
+                <span style={{ color: "#888780" }}>
+                  {(
+                    (Math.abs(l.price - currentPrice) / currentPrice) *
+                    100
+                  ).toFixed(1)}
+                  %
+                </span>
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>
@@ -1071,11 +1238,22 @@ function getNearestLevels(
     return true;
   });
   return valid
-    .sort((a, b) => Math.abs(a.price - currentPrice) - Math.abs(b.price - currentPrice))
+    .sort(
+      (a, b) =>
+        Math.abs(a.price - currentPrice) - Math.abs(b.price - currentPrice),
+    )
     .slice(0, 10);
 }
 
-function StaleBadge({ computedAtMs, hasDepth, hasCandles }: { computedAtMs: number; hasDepth: boolean; hasCandles: boolean }) {
+function StaleBadge({
+  computedAtMs,
+  hasDepth,
+  hasCandles,
+}: {
+  computedAtMs: number;
+  hasDepth: boolean;
+  hasCandles: boolean;
+}) {
   const ageMs = Date.now() - computedAtMs;
   const ageSec = Math.floor(ageMs / 1000);
   const ageMin = Math.floor(ageSec / 60);
@@ -1087,8 +1265,16 @@ function StaleBadge({ computedAtMs, hasDepth, hasCandles }: { computedAtMs: numb
     return (
       <span
         className="px-1.5 py-0.5 rounded text-xs font-medium"
-        style={{ background: "#e24b4a20", color: "#e24b4a", border: "1px solid #e24b4a40" }}
-        title={!hasCandles ? "No candle data — server may need restart" : "Depth data unavailable — server may need restart"}
+        style={{
+          background: "#e24b4a20",
+          color: "#e24b4a",
+          border: "1px solid #e24b4a40",
+        }}
+        title={
+          !hasCandles
+            ? "No candle data — server may need restart"
+            : "Depth data unavailable — server may need restart"
+        }
       >
         {!hasCandles ? "NO DATA" : "NO DEPTH"}
       </span>
@@ -1099,7 +1285,11 @@ function StaleBadge({ computedAtMs, hasDepth, hasCandles }: { computedAtMs: numb
     return (
       <span
         className="px-1.5 py-0.5 rounded text-xs"
-        style={{ background: "#d4a01720", color: "#d4a017", border: "1px solid #d4a01740" }}
+        style={{
+          background: "#d4a01720",
+          color: "#d4a017",
+          border: "1px solid #d4a01740",
+        }}
         title={`Data is ${ageMin}m old`}
       >
         {ageMin}m ago
@@ -1110,7 +1300,11 @@ function StaleBadge({ computedAtMs, hasDepth, hasCandles }: { computedAtMs: numb
   return (
     <span
       className="px-1.5 py-0.5 rounded text-xs"
-      style={{ background: "#1d9e7520", color: "#1d9e75", border: "1px solid #1d9e7540" }}
+      style={{
+        background: "#1d9e7520",
+        color: "#1d9e75",
+        border: "1px solid #1d9e7540",
+      }}
       title="Data is current"
     >
       LIVE

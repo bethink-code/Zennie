@@ -32,12 +32,7 @@
 // resolver. The Braid page derives the scope from `expandedTab` state
 // and passes the resolved view to LeftFrameCanvas.
 
-export type ChartScope =
-  | "default"
-  | "regime"
-  | "levels"
-  | "orders"
-  | "trades";
+export type ChartScope = "default" | "regime" | "levels" | "orders" | "trades";
 
 // The single source of truth for what the chart renders. Every
 // subsystem the chart can show appears here as a boolean. The chart
@@ -56,6 +51,9 @@ export interface ChartViewProps {
   showPools: boolean;
   showSweptPools: boolean;
   showDeadPools: boolean;
+  // Optional — scoped presets leave it off; only the default view sets it from
+  // the operator toggle. "Taken" = active pools price has closed through.
+  showTakenPools?: boolean;
   // Level lines + tags — when off, no level decoration is drawn.
   showLevels: boolean;
   // Regime overlay — top-edge strip coloured by recommended playbook.
