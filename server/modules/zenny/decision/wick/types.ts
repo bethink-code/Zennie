@@ -4,12 +4,17 @@
 // into a concrete TradePlan. The pattern that drives the entry is the
 // USER'S WICK ENTRY TAXONOMY — four practitioner-known mechanics:
 //
+//   under-touching — entry at the body line, the inner edge of the wick zone
 //   midpoint       — entry at 50% of the swept wick (Consequent Encroachment)
 //   extreme        — entry at the swept wick extreme (Turtle Soup / SFP)
 //   beyond         — entry just past the swept wick (second-sweep fade)
 //   anticipatory   — entry inside range BEFORE the wick fires (PD Array OTE)
 //
-// All four share target rule (opposing arm centre) and buffer rule
+// The first four are the confirmed-fade placements (the pool has already swept
+// + reclaimed + shifted structure — see qualifyPool). anticipatory is the
+// pre-confirmation front-run, kept available but not used by the fade matrix.
+//
+// All share target rule (opposing arm centre) and buffer rule
 // (max(% × price, ATR multiple)). Stop placement and entry placement vary.
 //
 // Research: see memory/zenny_wick_entry_mechanics.md.
@@ -19,7 +24,12 @@
 
 import type { Playbook } from "../../analysis/regime/types";
 
-export type EntryStyle = "midpoint" | "extreme" | "beyond" | "anticipatory";
+export type EntryStyle =
+  | "under-touching"
+  | "midpoint"
+  | "extreme"
+  | "beyond"
+  | "anticipatory";
 
 export type BeyondInterpretation = "second-sweep-fade" | "continuation";
 

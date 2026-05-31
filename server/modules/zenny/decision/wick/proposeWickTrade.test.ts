@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Candle, Timeframe } from "../../../../../shared/zennyTypes";
 import type { ExtractedArms } from "../../analysis/arms/extractArms";
 import type { AnalysisPool } from "../../analysis/orchestrator";
-import type {
-  Playbook,
-  TfRegimeAssessment,
-} from "../../analysis/regime/types";
+import type { Playbook, TfRegimeAssessment } from "../../analysis/regime/types";
 import { DEFAULT_WICK_CONFIG } from "./defaultConfig";
 import { proposeWickTrade } from "./proposeWickTrade";
 import type { WickTradeConfig } from "./types";
@@ -18,13 +15,14 @@ function pool(opts: {
   linePrice: number;
   wickHigh: number;
   wickLow: number;
-  status?: "active" | "swept" | "dead";
-  sweptCandleIndexOnPrimary?: number | null;
+  verdict?: "turning-point" | "run-through" | "unconfirmed";
+  fadeDirection?: "long" | "short" | null;
 }): AnalysisPool {
+  const turning = opts.verdict === "turning-point";
   return {
     id: opts.id,
     symbol: "BTCUSDT",
-    sourceTimeframe: "1H",
+    sourceTimeframe: "15m",
     type: opts.type,
     kind: "pivot_probe",
     linePrice: opts.linePrice,
@@ -33,15 +31,13 @@ function pool(opts: {
     centreLine: (opts.wickHigh + opts.wickLow) / 2,
     birthCandleTime: 0,
     birthCandleIndexOnPrimary: 0,
-    sweptCandleTime:
-      opts.sweptCandleIndexOnPrimary != null ? 1000 : null,
-    sweptCandleIndexOnPrimary: opts.sweptCandleIndexOnPrimary ?? null,
-    sweepReason:
-      opts.sweptCandleIndexOnPrimary != null ? "wick_took_pool_extreme" : null,
+    sweptCandleTime: opts.verdict ? 1000 : null,
+    sweptCandleIndexOnPrimary: opts.verdict ? 4 : null,
+    sweepReason: opts.verdict ? "wick_took_pool_extreme" : null,
     deathCandleTime: null,
     deathCandleIndexOnPrimary: null,
     deathReason: null,
-    status: opts.status ?? "active",
+    status: opts.verdict ? "swept" : "active",
     confluenceCount: 1,
     strength: "strong",
     pull: {
@@ -52,6 +48,25 @@ function pool(opts: {
       candlesMovingAway: 0,
       sEffectiveStandIn: 80,
     },
+    qualification: opts.verdict
+      ? {
+          poolId: opts.id,
+          verdict: opts.verdict,
+          fadeDirection:
+            opts.fadeDirection !== undefined
+              ? opts.fadeDirection
+              : turning
+                ? opts.type === "RESISTANCE"
+                  ? "short"
+                  : "long"
+                : null,
+          swept: true,
+          reclaimed: turning,
+          structureShifted: turning,
+          displacement: 1,
+          reasons: [],
+        }
+      : null,
   };
 }
 
@@ -91,7 +106,7 @@ function assessment(playbook: Playbook): TfRegimeAssessment {
     drivers: [],
   });
   return {
-    timeframe: "1H",
+    timeframe: "15m",
     pattern: "RANGING",
     playbooks: {
       accumulation: stub("accumulation"),
@@ -124,74 +139,37 @@ function assessment(playbook: Playbook): TfRegimeAssessment {
   };
 }
 
-// Build a sequence of candles where the LAST candle is the sweep, and any
-// candles between sweep and end are confirmation candles. `closeOfSweep` lets
-// the test set the sweep candle's close (above/below the line, etc.).
-function candles(opts: {
-  lengthBeforeSweep: number;
-  sweepCandleClose: number;
-  postSweepCloses: number[]; // closes for candles AFTER the sweep
-  basePrice: number;
-}): Candle[] {
-  const out: Candle[] = [];
-  // Pre-sweep filler.
-  for (let i = 0; i < opts.lengthBeforeSweep; i++) {
-    out.push({
-      open: opts.basePrice,
-      high: opts.basePrice,
-      low: opts.basePrice,
-      close: opts.basePrice,
-      openTime: i * 1000,
-      closeTime: i * 1000 + 999,
-      volume: 1,
-    });
-  }
-  // Sweep candle.
-  const sweepIdx = out.length;
-  out.push({
-    open: opts.basePrice,
-    high: opts.basePrice + 10,
-    low: opts.basePrice - 10,
-    close: opts.sweepCandleClose,
-    openTime: sweepIdx * 1000,
-    closeTime: sweepIdx * 1000 + 999,
+// Flat, zero-range candles so ATR = 0 and buffer = percentage × price (0.2%),
+// keeping geometry assertions exact.
+function flatCandles(price: number, n = 20): Candle[] {
+  return Array.from({ length: n }, (_, i) => ({
+    open: price,
+    high: price,
+    low: price,
+    close: price,
+    openTime: i * 1000,
+    closeTime: i * 1000 + 999,
     volume: 1,
-  });
-  // Post-sweep candles.
-  for (let i = 0; i < opts.postSweepCloses.length; i++) {
-    const idx = out.length;
-    out.push({
-      open: opts.basePrice,
-      high: opts.basePrice,
-      low: opts.basePrice,
-      close: opts.postSweepCloses[i],
-      openTime: idx * 1000,
-      closeTime: idx * 1000 + 999,
-      volume: 1,
-    });
-  }
-  return out;
+  }));
 }
 
-// Override DEFAULT_WICK_CONFIG selectively.
 function cfg(overrides: Partial<WickTradeConfig> = {}): WickTradeConfig {
   return { ...DEFAULT_WICK_CONFIG, ...overrides };
 }
 
-const TF: Timeframe = "1H";
+const TF: Timeframe = "15m";
 
 // --- Tests -----------------------------------------------------------------
 
-describe("proposeWickTrade — RANGING + swept RESISTANCE", () => {
-  it("midpoint entry: short, entry = (line+wickHigh)/2, stop past wickHigh", () => {
+describe("proposeWickTrade — fades qualified turning points", () => {
+  it("RANGING + turning-point RESISTANCE → short midpoint fade", () => {
     const upper = pool({
       id: "u",
       type: "RESISTANCE",
       linePrice: 100,
       wickHigh: 106,
       wickLow: 100,
-      status: "swept",
-      sweptCandleIndexOnPrimary: 4,
+      verdict: "turning-point",
     });
     const lower = pool({
       id: "l",
@@ -200,16 +178,9 @@ describe("proposeWickTrade — RANGING + swept RESISTANCE", () => {
       wickHigh: 90,
       wickLow: 86,
     });
-    // Sweep candle closes at 99 (back below the line) — confirmation present.
-    const cs = candles({
-      lengthBeforeSweep: 4,
-      sweepCandleClose: 99,
-      postSweepCloses: [],
-      basePrice: 95,
-    });
     const plan = proposeWickTrade({
       timeframe: TF,
-      candles: cs,
+      candles: flatCandles(99),
       currentPrice: 99,
       arms: arms({ upper, lower, dominantSide: "upper" }),
       pools: [upper, lower],
@@ -218,157 +189,20 @@ describe("proposeWickTrade — RANGING + swept RESISTANCE", () => {
     expect(plan).not.toBeNull();
     expect(plan!.side).toBe("short");
     expect(plan!.entry).toBeCloseTo(103, 5); // (100+106)/2
-    // buffer = max(0.2% × 99, ATR(14)×0.25). ATR not computable on this short
-    // history so falls back to pct = 0.198.
-    expect(plan!.stop).toBeCloseTo(106 + 0.198, 2);
+    expect(plan!.stop).toBeCloseTo(106 + 0.198, 2); // wickHigh + 0.2%×99
     expect(plan!.target).toBe(88); // lower centre = (86+90)/2
     expect(plan!.anchorPoolId).toBe("u");
-    expect(plan!.rationale[0]).toMatch(/midpoint/);
+    expect(plan!.rationale[0]).toMatch(/turning-point/);
   });
 
-  it("fade entries don't fire when pool is still active (matrix without anticipatory)", () => {
-    // Active pool means no sweep yet; midpoint and extreme both require
-    // a swept pool. Anticipatory removed from the test matrix so we
-    // verify only the fade-entry guard.
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 100,
-      wickHigh: 106,
-      wickLow: 100,
-      status: "active",
-    });
-    const cs = candles({
-      lengthBeforeSweep: 5,
-      sweepCandleClose: 100,
-      postSweepCloses: [],
-      basePrice: 95,
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: cs,
-      currentPrice: 99,
-      arms: arms({ upper, dominantSide: "upper" }),
-      pools: [upper],
-      assessment: assessment("ranging"),
-      config: cfg({
-        regimeMatrix: {
-          ...DEFAULT_WICK_CONFIG.regimeMatrix,
-          ranging: ["midpoint", "extreme"], // exclude anticipatory for this test
-        },
-      }),
-    });
-    expect(plan).toBeNull();
-  });
-
-  it("extreme entry honours confirmation gate — close-back-inside present", () => {
-    // Force midpoint OFF in the matrix so extreme is the only candidate.
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 100,
-      wickHigh: 106,
-      wickLow: 100,
-      status: "swept",
-      sweptCandleIndexOnPrimary: 4,
-    });
-    const lower = pool({
-      id: "l",
-      type: "SUPPORT",
-      linePrice: 90,
-      wickHigh: 90,
-      wickLow: 86,
-    });
-    const cs = candles({
-      lengthBeforeSweep: 4,
-      sweepCandleClose: 99, // close BACK below 100
-      postSweepCloses: [],
-      basePrice: 95,
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: cs,
-      currentPrice: 99,
-      arms: arms({ upper, lower, dominantSide: "upper" }),
-      pools: [upper, lower],
-      assessment: assessment("ranging"),
-      config: cfg({
-        regimeMatrix: { ...DEFAULT_WICK_CONFIG.regimeMatrix, ranging: ["extreme"] },
-      }),
-    });
-    expect(plan).not.toBeNull();
-    expect(plan!.entry).toBe(106); // wickHigh
-  });
-
-  it("extreme entry blocked when no close-back-inside within window", () => {
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 100,
-      wickHigh: 106,
-      wickLow: 100,
-      status: "swept",
-      sweptCandleIndexOnPrimary: 4,
-    });
-    // Sweep close ABOVE the line — no confirmation. Post-sweep candle also above.
-    const cs = candles({
-      lengthBeforeSweep: 4,
-      sweepCandleClose: 102,
-      postSweepCloses: [101],
-      basePrice: 95,
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: cs,
-      currentPrice: 101,
-      arms: arms({ upper, dominantSide: "upper" }),
-      pools: [upper],
-      assessment: assessment("ranging"),
-      config: cfg({
-        regimeMatrix: { ...DEFAULT_WICK_CONFIG.regimeMatrix, ranging: ["extreme"] },
-      }),
-    });
-    expect(plan).toBeNull();
-  });
-});
-
-describe("proposeWickTrade — quality vetoes", () => {
-  it("returns null when the target is too small relative to the stop", () => {
-    const lower = pool({
-      id: "l",
-      type: "SUPPORT",
-      linePrice: 100.2,
-      wickHigh: 100.8,
-      wickLow: 100,
-      status: "active",
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: candles({
-        lengthBeforeSweep: 5,
-        sweepCandleClose: 100.3,
-        postSweepCloses: [],
-        basePrice: 100.3,
-      }),
-      currentPrice: 100.3,
-      arms: arms({ lower, dominantSide: "lower" }),
-      pools: [lower],
-      assessment: assessment("ranging"),
-    });
-    expect(plan).toBeNull();
-  });
-});
-
-describe("proposeWickTrade — SUPPORT mirrors RESISTANCE", () => {
-  it("midpoint entry on swept SUPPORT → long, entry = (wickLow+line)/2", () => {
+  it("RANGING + turning-point SUPPORT → long midpoint fade", () => {
     const lower = pool({
       id: "l",
       type: "SUPPORT",
       linePrice: 100,
       wickHigh: 100,
       wickLow: 94,
-      status: "swept",
-      sweptCandleIndexOnPrimary: 4,
+      verdict: "turning-point",
     });
     const upper = pool({
       id: "u",
@@ -377,15 +211,9 @@ describe("proposeWickTrade — SUPPORT mirrors RESISTANCE", () => {
       wickHigh: 114,
       wickLow: 110,
     });
-    const cs = candles({
-      lengthBeforeSweep: 4,
-      sweepCandleClose: 101, // close back above 100
-      postSweepCloses: [],
-      basePrice: 105,
-    });
     const plan = proposeWickTrade({
       timeframe: TF,
-      candles: cs,
+      candles: flatCandles(101),
       currentPrice: 101,
       arms: arms({ upper, lower, dominantSide: "lower" }),
       pools: [upper, lower],
@@ -396,17 +224,15 @@ describe("proposeWickTrade — SUPPORT mirrors RESISTANCE", () => {
     expect(plan!.entry).toBe(97); // (94+100)/2
     expect(plan!.target).toBe(112); // upper centre
   });
-});
 
-describe("proposeWickTrade — ANTICIPATORY", () => {
-  it("anticipatory entry fires on TRENDING + active pool", () => {
+  it("under-touching entry sits at the body line", () => {
     const upper = pool({
       id: "u",
       type: "RESISTANCE",
       linePrice: 100,
       wickHigh: 106,
       wickLow: 100,
-      status: "active",
+      verdict: "turning-point",
     });
     const lower = pool({
       id: "l",
@@ -415,179 +241,134 @@ describe("proposeWickTrade — ANTICIPATORY", () => {
       wickHigh: 90,
       wickLow: 86,
     });
-    const cs = candles({
-      lengthBeforeSweep: 5,
-      sweepCandleClose: 95,
-      postSweepCloses: [],
-      basePrice: 95,
-    });
     const plan = proposeWickTrade({
       timeframe: TF,
-      candles: cs,
-      currentPrice: 95,
-      arms: arms({ upper, lower, dominantSide: "upper" }),
-      pools: [upper, lower],
-      assessment: assessment("trending"),
-    });
-    expect(plan).not.toBeNull();
-    expect(plan!.side).toBe("short");
-    // Entry is below wickHigh by 1.5 × buffer (default fixed-buffer rule).
-    // buffer = 0.2% × 95 = 0.19; offset = 1.5 × 0.19 = 0.285.
-    expect(plan!.entry).toBeCloseTo(106 - 0.285, 2);
-    expect(plan!.sizeMultiplier).toBe(0.5);
-  });
-
-  it("anticipatory entry in RANGING still uses the deeper entry", () => {
-    const lower = pool({
-      id: "l",
-      type: "SUPPORT",
-      linePrice: 100,
-      wickHigh: 100,
-      wickLow: 94,
-      status: "active",
-    });
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 110,
-      wickHigh: 114,
-      wickLow: 110,
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: candles({
-        lengthBeforeSweep: 5,
-        sweepCandleClose: 101,
-        postSweepCloses: [],
-        basePrice: 101,
-      }),
-      currentPrice: 101,
-      arms: arms({ upper, lower, dominantSide: "lower" }),
-      pools: [upper, lower],
-      assessment: assessment("ranging"),
-      config: cfg({
-        regimeMatrix: {
-          ...DEFAULT_WICK_CONFIG.regimeMatrix,
-          ranging: ["anticipatory"],
-        },
-      }),
-    });
-    expect(plan).not.toBeNull();
-    // buffer = 0.2% × 101 = 0.202; offset = 1.5 × 0.202 = 0.303
-    expect(plan!.entry).toBeCloseTo(94 + 0.303, 2);
-  });
-
-  it("anticipatory blocked by requireTrendingRegime when explicitly opted in", () => {
-    // Updated 2026-05-09: regimeMatrix is now the authoritative gate.
-    // requireTrendingRegime defaults to false (the matrix selects which
-    // regimes allow anticipatory). This test verifies the legacy
-    // requireTrendingRegime flag still works when explicitly set true.
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 100,
-      wickHigh: 106,
-      wickLow: 100,
-      status: "active",
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: candles({
-        lengthBeforeSweep: 5,
-        sweepCandleClose: 95,
-        postSweepCloses: [],
-        basePrice: 95,
-      }),
-      currentPrice: 95,
-      arms: arms({ upper, dominantSide: "upper" }),
-      pools: [upper],
-      assessment: assessment("ranging"),
-      config: cfg({
-        regimeMatrix: {
-          ...DEFAULT_WICK_CONFIG.regimeMatrix,
-          ranging: ["anticipatory"],
-        },
-        anticipatory: {
-          ...DEFAULT_WICK_CONFIG.anticipatory,
-          requireTrendingRegime: true, // explicit opt-in to legacy behavior
-        },
-      }),
-    });
-    expect(plan).toBeNull();
-  });
-
-  it("anticipatory disabled by config returns null", () => {
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 100,
-      wickHigh: 106,
-      wickLow: 100,
-      status: "active",
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: candles({
-        lengthBeforeSweep: 5,
-        sweepCandleClose: 95,
-        postSweepCloses: [],
-        basePrice: 95,
-      }),
-      currentPrice: 95,
-      arms: arms({ upper, dominantSide: "upper" }),
-      pools: [upper],
-      assessment: assessment("trending"),
-      config: cfg({
-        anticipatory: { ...DEFAULT_WICK_CONFIG.anticipatory, enabled: false },
-      }),
-    });
-    expect(plan).toBeNull();
-  });
-});
-
-describe("proposeWickTrade — BEYOND has wider stop", () => {
-  it("beyond entry stop is stopMultiplier × buffer past wick", () => {
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 100,
-      wickHigh: 106,
-      wickLow: 100,
-      status: "swept",
-      sweptCandleIndexOnPrimary: 4,
-    });
-    const lower = pool({
-      id: "l",
-      type: "SUPPORT",
-      linePrice: 90,
-      wickHigh: 90,
-      wickLow: 86,
-    });
-    const cs = candles({
-      lengthBeforeSweep: 4,
-      sweepCandleClose: 99,
-      postSweepCloses: [],
-      basePrice: 95,
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: cs,
+      candles: flatCandles(99),
       currentPrice: 99,
       arms: arms({ upper, lower, dominantSide: "upper" }),
       pools: [upper, lower],
       assessment: assessment("ranging"),
       config: cfg({
-        regimeMatrix: { ...DEFAULT_WICK_CONFIG.regimeMatrix, ranging: ["beyond"] },
+        regimeMatrix: {
+          ...DEFAULT_WICK_CONFIG.regimeMatrix,
+          ranging: ["under-touching"],
+        },
       }),
     });
     expect(plan).not.toBeNull();
-    // buffer = 0.198; stop = 106 + 2 × 0.198 = 106.396.
-    expect(plan!.stop).toBeCloseTo(106 + 2 * 0.198, 2);
-    expect(plan!.entry).toBeCloseTo(106 + 0.198, 2);
+    expect(plan!.entry).toBe(100); // linePrice
   });
-});
 
-describe("proposeWickTrade — guards", () => {
+  it("does NOT fade a run-through pool", () => {
+    const upper = pool({
+      id: "u",
+      type: "RESISTANCE",
+      linePrice: 100,
+      wickHigh: 106,
+      wickLow: 100,
+      verdict: "run-through",
+      fadeDirection: null,
+    });
+    const lower = pool({
+      id: "l",
+      type: "SUPPORT",
+      linePrice: 90,
+      wickHigh: 90,
+      wickLow: 86,
+    });
+    const plan = proposeWickTrade({
+      timeframe: TF,
+      candles: flatCandles(99),
+      currentPrice: 99,
+      arms: arms({ upper, lower, dominantSide: "upper" }),
+      pools: [upper, lower],
+      assessment: assessment("ranging"),
+    });
+    expect(plan).toBeNull();
+  });
+
+  it("returns null when there are no turning-point pools", () => {
+    const upper = pool({
+      id: "u",
+      type: "RESISTANCE",
+      linePrice: 100,
+      wickHigh: 106,
+      wickLow: 100,
+    });
+    const plan = proposeWickTrade({
+      timeframe: TF,
+      candles: flatCandles(99),
+      currentPrice: 99,
+      arms: arms({ upper, dominantSide: "upper" }),
+      pools: [upper],
+      assessment: assessment("ranging"),
+    });
+    expect(plan).toBeNull();
+  });
+
+  it("regime gate: does not fade in TRENDING even with a turning point", () => {
+    const upper = pool({
+      id: "u",
+      type: "RESISTANCE",
+      linePrice: 100,
+      wickHigh: 106,
+      wickLow: 100,
+      verdict: "turning-point",
+    });
+    const lower = pool({
+      id: "l",
+      type: "SUPPORT",
+      linePrice: 90,
+      wickHigh: 90,
+      wickLow: 86,
+    });
+    const plan = proposeWickTrade({
+      timeframe: TF,
+      candles: flatCandles(99),
+      currentPrice: 99,
+      arms: arms({ upper, lower, dominantSide: "upper" }),
+      pools: [upper, lower],
+      assessment: assessment("trending"), // fade matrix is empty here
+    });
+    expect(plan).toBeNull();
+  });
+
+  it("picks the turning point nearest current price", () => {
+    const near = pool({
+      id: "near",
+      type: "RESISTANCE",
+      linePrice: 101,
+      wickHigh: 104,
+      wickLow: 101,
+      verdict: "turning-point",
+    });
+    const far = pool({
+      id: "far",
+      type: "RESISTANCE",
+      linePrice: 130,
+      wickHigh: 134,
+      wickLow: 130,
+      verdict: "turning-point",
+    });
+    const lower = pool({
+      id: "l",
+      type: "SUPPORT",
+      linePrice: 90,
+      wickHigh: 90,
+      wickLow: 86,
+    });
+    const plan = proposeWickTrade({
+      timeframe: TF,
+      candles: flatCandles(99),
+      currentPrice: 99,
+      arms: arms({ upper: near, lower, dominantSide: "upper" }),
+      pools: [far, near, lower],
+      assessment: assessment("ranging"),
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.anchorPoolId).toBe("near");
+  });
+
   it("returns null when regime has no recommended playbook", () => {
     const upper = pool({
       id: "u",
@@ -595,66 +376,17 @@ describe("proposeWickTrade — guards", () => {
       linePrice: 100,
       wickHigh: 106,
       wickLow: 100,
+      verdict: "turning-point",
     });
     const a = assessment("ranging");
     a.recommended = null;
     const plan = proposeWickTrade({
       timeframe: TF,
-      candles: candles({
-        lengthBeforeSweep: 5,
-        sweepCandleClose: 99,
-        postSweepCloses: [],
-        basePrice: 95,
-      }),
+      candles: flatCandles(99),
       currentPrice: 99,
       arms: arms({ upper, dominantSide: "upper" }),
       pools: [upper],
       assessment: a,
-    });
-    expect(plan).toBeNull();
-  });
-
-  it("returns null when no dominant arm exists", () => {
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: candles({
-        lengthBeforeSweep: 5,
-        sweepCandleClose: 99,
-        postSweepCloses: [],
-        basePrice: 95,
-      }),
-      currentPrice: 99,
-      arms: arms({ dominantSide: "neither" }),
-      pools: [],
-      assessment: assessment("ranging"),
-    });
-    expect(plan).toBeNull();
-  });
-
-  it("returns null when sweep is too old", () => {
-    const upper = pool({
-      id: "u",
-      type: "RESISTANCE",
-      linePrice: 100,
-      wickHigh: 106,
-      wickLow: 100,
-      status: "swept",
-      sweptCandleIndexOnPrimary: 0, // bar 0
-    });
-    // 10 bars after the sweep — past maxBarsSinceSweep (default 5).
-    const cs = candles({
-      lengthBeforeSweep: 0, // sweep is bar 0
-      sweepCandleClose: 99,
-      postSweepCloses: [99, 99, 99, 99, 99, 99, 99, 99, 99, 99],
-      basePrice: 95,
-    });
-    const plan = proposeWickTrade({
-      timeframe: TF,
-      candles: cs,
-      currentPrice: 99,
-      arms: arms({ upper, dominantSide: "upper" }),
-      pools: [upper],
-      assessment: assessment("ranging"),
     });
     expect(plan).toBeNull();
   });

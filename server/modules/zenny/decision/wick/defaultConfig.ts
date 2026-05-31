@@ -42,22 +42,23 @@ export const DEFAULT_WICK_CONFIG: WickTradeConfig = {
     requireTrendingRegime: false,
   },
 
-  // W3 — regime → entry style matrix
-  // Updated 2026-05-09: added 'anticipatory' to RANGING and ACCUMULATION
-  // per "optimise within the gate" principle (memory/zenny_regime_gate_principle.md).
-  // RANGING + ACCUMULATION already fire trades; we just added another entry
-  // style they can use. We did NOT add anticipatory to NO_TRADE — that
-  // would override the gate, not optimise within it.
+  // W3 — regime → entry style matrix. This is the regime GATE for fading.
+  // Per the 2026-05-30 deep-research (Scratch/regime-strategy-research-2026-05-30.md):
+  // FADE only in mean-reverting regimes (ranging, accumulation). TRENDING and
+  // BREAKOUT are FOLLOW regimes — fading there is what got the bot gamed — so
+  // they get NO fade styles (an empty list = stand aside; the follow playbook
+  // is a later module). The proposer tries the listed styles in order.
   regimeMatrix: {
-    ranging: ["midpoint", "extreme", "anticipatory"],
-    accumulation: ["midpoint", "anticipatory"],
-    trending: ["anticipatory"],
-    breakout: ["extreme"],
+    ranging: ["midpoint", "extreme", "under-touching"],
+    accumulation: ["midpoint", "under-touching"],
+    trending: [],
+    breakout: [],
   },
 
-  // Per-style size multipliers. #1/#2 are the bread-and-butter (full size);
-  // #3 is wider stop so smaller; #4 is anticipatory so smallest.
+  // Per-style size multipliers (conviction). Conservative inner entries get
+  // full size; the wider-stop second-sweep gets less.
   sizeMultiplier: {
+    "under-touching": 1.0,
     midpoint: 1.0,
     extreme: 1.0,
     beyond: 0.7,

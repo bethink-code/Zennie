@@ -24,10 +24,7 @@
 // not a limit, and we keep this v1 to limit-only).
 
 import type { AnalysisPool } from "../../analysis/orchestrator";
-import type {
-  AnticipatoryConfig,
-  EntryStyle,
-} from "./types";
+import type { AnticipatoryConfig, EntryStyle } from "./types";
 
 export interface ComputeEntryInput {
   pool: AnalysisPool;
@@ -42,6 +39,9 @@ export function computeEntry(input: ComputeEntryInput): number | null {
   if (pool.type === "RESISTANCE") {
     // Short fade entries
     switch (style) {
+      case "under-touching":
+        // Inner edge of the wick zone — sell at the body line on the pullback.
+        return pool.linePrice;
       case "midpoint":
         return (pool.linePrice + pool.wickHigh) / 2;
       case "extreme":
@@ -60,6 +60,9 @@ export function computeEntry(input: ComputeEntryInput): number | null {
 
   // SUPPORT — long fade entries
   switch (style) {
+    case "under-touching":
+      // Inner edge of the wick zone — buy at the body line on the pullback.
+      return pool.linePrice;
     case "midpoint":
       return (pool.linePrice + pool.wickLow) / 2;
     case "extreme":

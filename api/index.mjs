@@ -4552,35 +4552,6 @@ function entryTravelInRiskUnits(plan, currentPrice) {
   return Math.abs(plan.entry - currentPrice) / riskAbs;
 }
 
-// server/modules/zenny/decision/wick/checkConfirmation.ts
-function checkConfirmation(input) {
-  const { pool: pool2, candles, maxBarsAfterSweep } = input;
-  const sweptIdx = pool2.sweptCandleIndexOnPrimary;
-  if (sweptIdx === null) {
-    return { satisfied: false, reason: "pool not swept" };
-  }
-  if (sweptIdx < 0 || sweptIdx >= candles.length) {
-    return { satisfied: false, reason: "sweep index out of range" };
-  }
-  const lastIdx = Math.min(
-    candles.length - 1,
-    sweptIdx + maxBarsAfterSweep
-  );
-  for (let i = sweptIdx; i <= lastIdx; i++) {
-    const c = candles[i];
-    if (pool2.type === "RESISTANCE" && c.close < pool2.linePrice) {
-      return { satisfied: true, confirmedAtIndex: i };
-    }
-    if (pool2.type === "SUPPORT" && c.close > pool2.linePrice) {
-      return { satisfied: true, confirmedAtIndex: i };
-    }
-  }
-  return {
-    satisfied: false,
-    reason: `no close-back-inside within ${maxBarsAfterSweep} bars`
-  };
-}
-
 // server/modules/zenny/decision/wick/computeBuffer.ts
 function computeBuffer(price, candles, config) {
   const pctBuffer = price * config.percentage;
@@ -4599,6 +4570,8 @@ function computeEntry(input) {
   const { pool: pool2, style, buffer, anticipatory } = input;
   if (pool2.type === "RESISTANCE") {
     switch (style) {
+      case "under-touching":
+        return pool2.linePrice;
       case "midpoint":
         return (pool2.linePrice + pool2.wickHigh) / 2;
       case "extreme":
@@ -4615,6 +4588,8 @@ function computeEntry(input) {
     }
   }
   switch (style) {
+    case "under-touching":
+      return pool2.linePrice;
     case "midpoint":
       return (pool2.linePrice + pool2.wickLow) / 2;
     case "extreme":
@@ -4706,21 +4681,22 @@ var DEFAULT_WICK_CONFIG = {
     // ICT Sweet Spot
     requireTrendingRegime: false
   },
-  // W3 — regime → entry style matrix
-  // Updated 2026-05-09: added 'anticipatory' to RANGING and ACCUMULATION
-  // per "optimise within the gate" principle (memory/zenny_regime_gate_principle.md).
-  // RANGING + ACCUMULATION already fire trades; we just added another entry
-  // style they can use. We did NOT add anticipatory to NO_TRADE — that
-  // would override the gate, not optimise within it.
+  // W3 — regime → entry style matrix. This is the regime GATE for fading.
+  // Per the 2026-05-30 deep-research (Scratch/regime-strategy-research-2026-05-30.md):
+  // FADE only in mean-reverting regimes (ranging, accumulation). TRENDING and
+  // BREAKOUT are FOLLOW regimes — fading there is what got the bot gamed — so
+  // they get NO fade styles (an empty list = stand aside; the follow playbook
+  // is a later module). The proposer tries the listed styles in order.
   regimeMatrix: {
-    ranging: ["midpoint", "extreme", "anticipatory"],
-    accumulation: ["midpoint", "anticipatory"],
-    trending: ["anticipatory"],
-    breakout: ["extreme"]
+    ranging: ["midpoint", "extreme", "under-touching"],
+    accumulation: ["midpoint", "under-touching"],
+    trending: [],
+    breakout: []
   },
-  // Per-style size multipliers. #1/#2 are the bread-and-butter (full size);
-  // #3 is wider stop so smaller; #4 is anticipatory so smallest.
+  // Per-style size multipliers (conviction). Conservative inner entries get
+  // full size; the wider-stop second-sweep gets less.
   sizeMultiplier: {
+    "under-touching": 1,
     midpoint: 1,
     extreme: 1,
     beyond: 0.7,
@@ -4738,43 +4714,28 @@ function proposeWickTrade(input) {
   if (!playbook) return null;
   const allowedStyles = cfg.regimeMatrix[playbook];
   if (!allowedStyles || allowedStyles.length === 0) return null;
-  const dominant = pickDominantArm(input.arms);
-  if (!dominant) return null;
-  const pool2 = dominant.pool;
-  const side = pool2.type === "RESISTANCE" ? "short" : "long";
+  const pool2 = pickTurningPoint(input.pools, input.currentPrice);
+  if (!pool2) return null;
+  const side = pool2.qualification?.fadeDirection;
+  if (!side) return null;
   const buffer = computeBuffer(input.currentPrice, input.candles, cfg.buffer);
   for (const style of allowedStyles) {
-    const plan = tryStyle({
-      style,
-      pool: pool2,
-      side,
-      input,
-      cfg,
-      buffer,
-      playbook
-    });
+    const plan = tryStyle({ style, pool: pool2, side, input, cfg, buffer, playbook });
     if (plan !== null) return plan;
   }
   return null;
 }
+function pickTurningPoint(pools, currentPrice) {
+  const candidates = pools.filter(
+    (p) => p.qualification?.verdict === "turning-point" && p.qualification.fadeDirection !== null
+  );
+  if (candidates.length === 0) return null;
+  return candidates.reduce(
+    (best, p) => Math.abs(p.linePrice - currentPrice) < Math.abs(best.linePrice - currentPrice) ? p : best
+  );
+}
 function tryStyle(args) {
   const { style, pool: pool2, side, input, cfg, buffer, playbook } = args;
-  if (style === "anticipatory") {
-    if (!cfg.anticipatory.enabled) return null;
-    if (pool2.status !== "active") return null;
-    if (cfg.anticipatory.requireTrendingRegime && playbook !== "trending") {
-      return null;
-    }
-  } else {
-    if (pool2.status !== "swept") return null;
-    if (pool2.sweptCandleIndexOnPrimary === null || pool2.sweptCandleIndexOnPrimary < 0) {
-      return null;
-    }
-    const candlesSinceSweep = input.candles.length - 1 - pool2.sweptCandleIndexOnPrimary;
-    if (candlesSinceSweep < 0 || candlesSinceSweep > cfg.maxBarsSinceSweep) {
-      return null;
-    }
-  }
   const entry = computeEntry({
     pool: pool2,
     style,
@@ -4790,33 +4751,17 @@ function tryStyle(args) {
   if (side === "long" && (stop >= entry || targetOut.target <= entry)) {
     return null;
   }
-  if (cfg.confirmation.requiredFor.includes(style)) {
-    const conf = checkConfirmation({
-      pool: pool2,
-      candles: input.candles,
-      maxBarsAfterSweep: cfg.confirmation.maxBarsAfterSweep
-    });
-    if (!conf.satisfied) return null;
-  }
   const riskAbs = Math.abs(entry - stop);
   const rewardAbs = Math.abs(targetOut.target - entry);
   if (riskAbs === 0 || entry === 0) return null;
   const riskRewardRatio = rewardAbs / riskAbs;
   if (riskRewardRatio < cfg.minRiskRewardRatio) return null;
-  const sizeMultiplier = cfg.sizeMultiplier[style];
   const rationale = [
-    `playbook ${playbook} \u2192 entry style ${style}`,
-    `pool ${pool2.id} (${pool2.type}, ${pool2.status})`,
+    `fade ${playbook} turning-point`,
+    `pool ${pool2.id} (${pool2.type})`,
+    `entry style ${style}`,
     `target via ${targetOut.source}`
   ];
-  if (style === "beyond") {
-    rationale.push(
-      `interpretation: ${cfg.beyond.interpretation}, stop \xD7${cfg.beyond.stopMultiplier}`
-    );
-  }
-  if (style === "anticipatory") {
-    rationale.push(`distance rule: ${cfg.anticipatory.distanceRule}`);
-  }
   return {
     timeframe: input.timeframe,
     playbook,
@@ -4827,19 +4772,10 @@ function tryStyle(args) {
     target: targetOut.target,
     riskRewardRatio,
     riskPct: riskAbs / entry * 100,
-    sizeMultiplier,
+    sizeMultiplier: cfg.sizeMultiplier[style],
     anchorPoolId: pool2.id,
     rationale
   };
-}
-function pickDominantArm(arms) {
-  if (arms.dominantSide === "upper" && arms.upper) {
-    return { side: "upper", pool: arms.upper.pool };
-  }
-  if (arms.dominantSide === "lower" && arms.lower) {
-    return { side: "lower", pool: arms.lower.pool };
-  }
-  return null;
 }
 
 // server/modules/zenny/decision/assembleTradePlans.ts
@@ -4891,6 +4827,35 @@ function assembleTradePlans(input) {
     primary: perTimeframe[input.primaryTimeframe] ?? null,
     perTimeframe,
     plansPerTimeframe
+  };
+}
+
+// server/modules/zenny/decision/wick/checkConfirmation.ts
+function checkConfirmation(input) {
+  const { pool: pool2, candles, maxBarsAfterSweep } = input;
+  const sweptIdx = pool2.sweptCandleIndexOnPrimary;
+  if (sweptIdx === null) {
+    return { satisfied: false, reason: "pool not swept" };
+  }
+  if (sweptIdx < 0 || sweptIdx >= candles.length) {
+    return { satisfied: false, reason: "sweep index out of range" };
+  }
+  const lastIdx = Math.min(
+    candles.length - 1,
+    sweptIdx + maxBarsAfterSweep
+  );
+  for (let i = sweptIdx; i <= lastIdx; i++) {
+    const c = candles[i];
+    if (pool2.type === "RESISTANCE" && c.close < pool2.linePrice) {
+      return { satisfied: true, confirmedAtIndex: i };
+    }
+    if (pool2.type === "SUPPORT" && c.close > pool2.linePrice) {
+      return { satisfied: true, confirmedAtIndex: i };
+    }
+  }
+  return {
+    satisfied: false,
+    reason: `no close-back-inside within ${maxBarsAfterSweep} bars`
   };
 }
 
@@ -5247,6 +5212,15 @@ async function runAnalysis(input) {
   const regimeHistoryPerTimeframe = {};
   const feedHealthPerTimeframe = {};
   const nowMs = Date.now();
+  const primaryPivots = findBodyPivots({ candles: primaryCandles, n: pivotN });
+  const qualifiedPools = pools.map((p) => ({
+    ...p,
+    qualification: qualifyPool({
+      pool: p,
+      candles: primaryCandles,
+      pivots: primaryPivots
+    })
+  }));
   for (const tf of analysedTfs) {
     const tfCandles = perTfCandles.get(tf);
     if (!tfCandles || tfCandles.length === 0) continue;
@@ -5261,7 +5235,7 @@ async function runAnalysis(input) {
       expectedBarMs
     };
     const tfRank = TF_RANK[tf];
-    const relevantPools = pools.filter(
+    const relevantPools = qualifiedPools.filter(
       (p) => (TF_RANK[p.sourceTimeframe] ?? 0) >= tfRank
     );
     const tfPulls = runPullPass(
@@ -5318,16 +5292,7 @@ async function runAnalysis(input) {
     lower: null,
     dominantSide: "neither"
   };
-  const primaryEnrichedPools = enrichedPoolsPerTimeframe[input.primaryTimeframe] ?? pools.map((p) => ({ ...p, pull: null }));
-  const primaryPivots = findBodyPivots({ candles: primaryCandles, n: pivotN });
-  const qualifiedPrimaryPools = primaryEnrichedPools.map((pool2) => ({
-    ...pool2,
-    qualification: qualifyPool({
-      pool: pool2,
-      candles: primaryCandles,
-      pivots: primaryPivots
-    })
-  }));
+  const primaryEnrichedPools = enrichedPoolsPerTimeframe[input.primaryTimeframe] ?? qualifiedPools.map((p) => ({ ...p, pull: null }));
   const primaryRegimeHistory = regimeHistoryPerTimeframe[input.primaryTimeframe] ?? [];
   const regimeAssessment = regimeAssessmentPerTimeframe[input.primaryTimeframe] ? {
     primary: regimeAssessmentPerTimeframe[input.primaryTimeframe],
@@ -5339,7 +5304,7 @@ async function runAnalysis(input) {
     analysedTimeframes: analysedTfs,
     candles: primaryCandles,
     levels: passResult.levels,
-    pools: qualifiedPrimaryPools,
+    pools: primaryEnrichedPools,
     passInfo: passResult.passInfo,
     arms: primaryArms,
     armsPerTimeframe,

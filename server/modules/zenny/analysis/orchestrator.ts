@@ -534,6 +534,21 @@ export async function runAnalysis(
   > = {};
   const nowMs = Date.now();
 
+  // Qualify every pool against the primary TF (the verified sweep → reclaim →
+  // structure-shift sequence) ONCE here, so the per-TF enrichment below,
+  // state.pools, AND the decision layer all inherit the verdict. Pools carry
+  // sweptCandleIndexOnPrimary, so this is a primary-TF reading regardless of a
+  // pool's source TF.
+  const primaryPivots = findBodyPivots({ candles: primaryCandles, n: pivotN });
+  const qualifiedPools = pools.map((p) => ({
+    ...p,
+    qualification: qualifyPool({
+      pool: p,
+      candles: primaryCandles,
+      pivots: primaryPivots,
+    }),
+  }));
+
   for (const tf of analysedTfs) {
     const tfCandles = perTfCandles.get(tf);
     if (!tfCandles || tfCandles.length === 0) continue;
@@ -557,7 +572,7 @@ export async function runAnalysis(
     // 15m / 1H pools (sub-resolution); a Daily trader cares about D/W/M
     // only; etc.
     const tfRank = TF_RANK[tf];
-    const relevantPools = pools.filter(
+    const relevantPools = qualifiedPools.filter(
       (p) => (TF_RANK[p.sourceTimeframe] ?? 0) >= tfRank,
     );
 
@@ -640,22 +655,7 @@ export async function runAnalysis(
   };
   const primaryEnrichedPools =
     enrichedPoolsPerTimeframe[input.primaryTimeframe] ??
-    pools.map((p) => ({ ...p, pull: null }));
-
-  // Pool qualification (Step 1 of the regime-scoped strategy): tag each pool
-  // turning-point / run-through / unconfirmed via the verified sweep→reclaim→
-  // structure-shift sequence, against the primary TF's candles + swing pivots
-  // (pools carry sweptCandleIndexOnPrimary). Surfaces on the chart for eyeball
-  // verification before it gates live trades.
-  const primaryPivots = findBodyPivots({ candles: primaryCandles, n: pivotN });
-  const qualifiedPrimaryPools = primaryEnrichedPools.map((pool) => ({
-    ...pool,
-    qualification: qualifyPool({
-      pool,
-      candles: primaryCandles,
-      pivots: primaryPivots,
-    }),
-  }));
+    qualifiedPools.map((p) => ({ ...p, pull: null }));
   const primaryRegimeHistory =
     regimeHistoryPerTimeframe[input.primaryTimeframe] ?? [];
   const regimeAssessment: RegimeAssessmentResult | null =
@@ -672,7 +672,7 @@ export async function runAnalysis(
     analysedTimeframes: analysedTfs,
     candles: primaryCandles,
     levels: passResult.levels,
-    pools: qualifiedPrimaryPools,
+    pools: primaryEnrichedPools,
     passInfo: passResult.passInfo,
     arms: primaryArms,
     armsPerTimeframe,
