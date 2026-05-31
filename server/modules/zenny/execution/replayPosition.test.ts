@@ -52,6 +52,7 @@ function newPos(p: TradePlan): PositionRecord {
     symbol: "BTCUSDT",
     plan: p,
     emittedAtBarTs: 0,
+    accountRiskPct: p.riskPct,
   });
 }
 

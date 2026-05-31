@@ -25,6 +25,7 @@ describe("cancelPosition", () => {
       symbol: "BTCUSDT",
       plan: PLAN,
       emittedAtBarTs: 0,
+      accountRiskPct: PLAN.riskPct,
     });
     const next = cancelPosition({
       position: pos,
@@ -42,6 +43,7 @@ describe("cancelPosition", () => {
       symbol: "BTCUSDT",
       plan: PLAN,
       emittedAtBarTs: 0,
+      accountRiskPct: PLAN.riskPct,
     });
     const cancelled = cancelPosition({
       position: pos,

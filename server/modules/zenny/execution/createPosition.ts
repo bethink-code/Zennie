@@ -16,11 +16,15 @@ export interface CreatePositionInput {
   symbol: string;
   plan: TradePlan;
   emittedAtBarTs: number;
+  // The account-risk budget for this trade, from RiskConfig — NOT the plan's
+  // stop-distance geometry. This is what sizing actually risks. Keeping it
+  // here is the fix for the old conflation where the stop-distance-% was fed
+  // to the sizer as if it were the account-risk-%, which cancelled out and
+  // made every position a fixed fraction of equity.
+  accountRiskPct: number;
 }
 
-export function createPosition(
-  input: CreatePositionInput,
-): PositionRecord {
+export function createPosition(input: CreatePositionInput): PositionRecord {
   return {
     id: input.id,
     symbol: input.symbol,
@@ -30,7 +34,7 @@ export function createPosition(
     entryPrice: input.plan.entry,
     stopPrice: input.plan.stop,
     targetPrice: input.plan.target,
-    riskPct: input.plan.riskPct,
+    riskPct: input.accountRiskPct,
     sizeMultiplier: input.plan.sizeMultiplier,
     size: null,
     notional: null,

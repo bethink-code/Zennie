@@ -28,16 +28,14 @@ import type { Candle, Timeframe } from "../../../../shared/zennyTypes";
 import { runAnalysis } from "../analysis/orchestrator";
 import { fetchRecentLiquidations } from "../analysis/data/fetchRecentLiquidations";
 import { createPosition, submitPosition } from "../execution/createPosition";
+import { DEFAULT_RISK_CONFIG } from "../execution/riskConfig";
 import {
   DEFAULT_EXECUTION_CONFIG,
   type ExecutionConfig,
 } from "../execution/executionConfig";
 import { killSwitchEvaluate } from "../execution/killSwitchEvaluate";
 import { replayPosition } from "../execution/replayPosition";
-import type {
-  ExecutionBar,
-  PositionRecord,
-} from "../execution/types";
+import type { ExecutionBar, PositionRecord } from "../execution/types";
 import type { MarketDataProvider } from "../infrastructure/providers/providerInterface";
 import {
   loadAccount,
@@ -64,7 +62,12 @@ export interface RunPaperTradeTickResult {
   tickAt: number;
   hadOpenPosition: boolean;
   newPositionId: string | null;
-  transitions: Array<{ id: string; from: string; to: string; reason: string | null }>;
+  transitions: Array<{
+    id: string;
+    from: string;
+    to: string;
+    reason: string | null;
+  }>;
   account: {
     currentEquity: number;
     peakEquity: number;
@@ -94,7 +97,12 @@ export async function runPaperTradeTick(
     await logTick({
       symbol: input.symbol,
       timeframe: input.timeframe,
-      summary: { hadOpenPosition: false, transitions, account, noTransitionReason },
+      summary: {
+        hadOpenPosition: false,
+        transitions,
+        account,
+        noTransitionReason,
+      },
     });
     return {
       symbol: input.symbol,
@@ -143,7 +151,12 @@ export async function runPaperTradeTick(
     await logTick({
       symbol: input.symbol,
       timeframe: input.timeframe,
-      summary: { hadOpenPosition: false, transitions, account, noTransitionReason },
+      summary: {
+        hadOpenPosition: false,
+        transitions,
+        account,
+        noTransitionReason,
+      },
     });
     return {
       symbol: input.symbol,
@@ -215,6 +228,7 @@ export async function runPaperTradeTick(
         symbol: input.symbol,
         plan,
         emittedAtBarTs: latestClosedBar.openTime,
+        accountRiskPct: DEFAULT_RISK_CONFIG.accountRiskPct,
       });
       const pos = submitPosition(
         drafted,
@@ -276,10 +290,7 @@ export async function runPaperTradeTick(
 
 // --- helpers ---------------------------------------------------------------
 
-function applyPnl(
-  account: PaperAccountRow,
-  pnl: number,
-): PaperAccountRow {
+function applyPnl(account: PaperAccountRow, pnl: number): PaperAccountRow {
   const newEquity = account.currentEquity + pnl;
   const newPeak = Math.max(account.peakEquity, newEquity);
   return {

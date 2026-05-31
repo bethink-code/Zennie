@@ -22,7 +22,8 @@ function plan(opts: {
     entry: opts.entry,
     stop: opts.stop,
     target: opts.target,
-    riskRewardRatio: Math.abs(opts.target - opts.entry) / Math.abs(opts.entry - opts.stop),
+    riskRewardRatio:
+      Math.abs(opts.target - opts.entry) / Math.abs(opts.entry - opts.stop),
     riskPct: 1,
     sizeMultiplier: 1,
     anchorPoolId: "p1",
@@ -50,7 +51,13 @@ function bar(opts: {
 }
 
 function newPos(p: TradePlan, emittedAtBarTs = 0): PositionRecord {
-  return createPosition({ id: "test-1", symbol: "BTCUSDT", plan: p, emittedAtBarTs });
+  return createPosition({
+    id: "test-1",
+    symbol: "BTCUSDT",
+    plan: p,
+    emittedAtBarTs,
+    accountRiskPct: p.riskPct,
+  });
 }
 
 // --- Hard invariants -------------------------------------------------------
@@ -286,7 +293,9 @@ describe("reduceStep — FILLED transitions", () => {
 
 describe("reduceStep — short side", () => {
   it("short trade: entry above, stop above, target below; PnL flips sign", () => {
-    let pos = newPos(plan({ side: "short", entry: 100, stop: 105, target: 90 }));
+    let pos = newPos(
+      plan({ side: "short", entry: 100, stop: 105, target: 90 }),
+    );
     pos = reduceStep({
       position: pos,
       bar: bar({ openTime: TF_MS, high: 96, low: 94 }),
@@ -314,7 +323,9 @@ describe("reduceStep — short side", () => {
   });
 
   it("short entry fills when the next bar stays entirely above the limit", () => {
-    let pos = newPos(plan({ side: "short", entry: 100, stop: 105, target: 90 }));
+    let pos = newPos(
+      plan({ side: "short", entry: 100, stop: 105, target: 90 }),
+    );
     pos = reduceStep({
       position: pos,
       bar: bar({ openTime: TF_MS, high: 96, low: 94 }),

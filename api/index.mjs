@@ -5457,7 +5457,7 @@ function createPosition(input) {
     entryPrice: input.plan.entry,
     stopPrice: input.plan.stop,
     targetPrice: input.plan.target,
-    riskPct: input.plan.riskPct,
+    riskPct: input.accountRiskPct,
     sizeMultiplier: input.plan.sizeMultiplier,
     size: null,
     notional: null,
@@ -5502,6 +5502,11 @@ function submitPosition(position, equity, submittedAtBarTs) {
     lastEvaluatedAt: submittedAtBarTs
   };
 }
+
+// server/modules/zenny/execution/riskConfig.ts
+var DEFAULT_RISK_CONFIG = {
+  accountRiskPct: 0.5
+};
 
 // server/modules/zenny/execution/executionConfig.ts
 var DEFAULT_EXECUTION_CONFIG = {
@@ -5989,7 +5994,12 @@ async function runPaperTradeTick(input) {
     await logTick({
       symbol: input.symbol,
       timeframe: input.timeframe,
-      summary: { hadOpenPosition: false, transitions, account, noTransitionReason }
+      summary: {
+        hadOpenPosition: false,
+        transitions,
+        account,
+        noTransitionReason
+      }
     });
     return {
       symbol: input.symbol,
@@ -6033,7 +6043,12 @@ async function runPaperTradeTick(input) {
     await logTick({
       symbol: input.symbol,
       timeframe: input.timeframe,
-      summary: { hadOpenPosition: false, transitions, account, noTransitionReason }
+      summary: {
+        hadOpenPosition: false,
+        transitions,
+        account,
+        noTransitionReason
+      }
     });
     return {
       symbol: input.symbol,
@@ -6086,7 +6101,8 @@ async function runPaperTradeTick(input) {
         ),
         symbol: input.symbol,
         plan,
-        emittedAtBarTs: latestClosedBar.openTime
+        emittedAtBarTs: latestClosedBar.openTime,
+        accountRiskPct: DEFAULT_RISK_CONFIG.accountRiskPct
       });
       const pos = submitPosition(
         drafted,

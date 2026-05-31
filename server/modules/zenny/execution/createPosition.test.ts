@@ -24,7 +24,12 @@ describe("submitPosition", () => {
       symbol: "BTCUSDT",
       plan: PLAN,
       emittedAtBarTs: 1_000,
+      accountRiskPct: 0.5,
     });
+
+    // The risk budget comes from the config arg, NOT the plan's geometry —
+    // PLAN.riskPct is 1 (a stop-distance %), but the position risks 0.5%.
+    expect(drafted.riskPct).toBe(0.5);
 
     const live = submitPosition(drafted, 10_000, 1_999);
 
@@ -42,6 +47,7 @@ describe("submitPosition", () => {
       symbol: "BTCUSDT",
       plan: { ...PLAN, stop: PLAN.entry },
       emittedAtBarTs: 1_000,
+      accountRiskPct: 0.5,
     });
 
     const rejected = submitPosition(drafted, 10_000, 1_999);
