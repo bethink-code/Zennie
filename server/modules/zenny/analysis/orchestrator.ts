@@ -61,7 +61,12 @@ import type {
 import { assembleTradePlans } from "../decision/assembleTradePlans";
 import type { TradePlan, TradePlanResult } from "../decision/types";
 import { qualifyPool } from "../decision/qualify/qualifyPool";
-import type { PoolQualification } from "../decision/qualify/types";
+import type {
+  PoolQualification,
+  QualifyConfig,
+} from "../decision/qualify/types";
+import type { WickTradeConfig } from "../decision/wick/types";
+import type { ReachTradeConfig } from "../decision/reach/types";
 
 // TF rank ordering — higher number = higher (slower) timeframe. Used to
 // filter pools per-TF: a TF chart should consider only pools at or above
@@ -223,6 +228,15 @@ export interface RunAnalysisInput {
   // route layer from binance_liquidations and threaded in. Used by the
   // regime layer's liquidationProximity input. Absent → input unavailable.
   liquidations?: Array<{ price: number; usdValue: number }>;
+  // As-of cutoff (ms). When set, every TF fetch returns only candles that had
+  // CLOSED by this time — no lookahead. This is what makes the analysis safe to
+  // replay historically in the backtest. Absent → fetch the latest candles.
+  asOfMs?: number;
+  // Strategy tunables. Absent → module defaults. Threaded so the backtest (and
+  // the optimiser on top of it) can drive the whole pipeline from one config.
+  qualifyConfig?: QualifyConfig;
+  wickConfig?: WickTradeConfig;
+  reachConfig?: ReachTradeConfig;
 }
 
 export async function runAnalysis(
@@ -241,6 +255,7 @@ export async function runAnalysis(
           symbol: input.symbol,
           timeframe: tf,
           count: candleCount,
+          endTimeMs: input.asOfMs,
         });
         return { tf, candles };
       } catch {
@@ -546,6 +561,7 @@ export async function runAnalysis(
       pool: p,
       candles: primaryCandles,
       pivots: primaryPivots,
+      config: input.qualifyConfig,
     }),
   }));
 
@@ -642,6 +658,8 @@ export async function runAnalysis(
           primary: regimeAssessmentPerTimeframe[input.primaryTimeframe]!,
           perTimeframe: regimeAssessmentPerTimeframe,
         },
+        wickConfig: input.wickConfig,
+        reachConfig: input.reachConfig,
       })
     : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
 

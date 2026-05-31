@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Candle, Timeframe } from "../../../../../shared/zennyTypes";
 import type { ExtractedArms } from "../../analysis/arms/extractArms";
 import type { AnalysisPool } from "../../analysis/orchestrator";
-import type {
-  Playbook,
-  TfRegimeAssessment,
-} from "../../analysis/regime/types";
+import type { Playbook, TfRegimeAssessment } from "../../analysis/regime/types";
 import { DEFAULT_REACH_CONFIG } from "./defaultConfig";
 import { proposeReachTrade } from "./proposeReachTrade";
 import type { ReachTradeConfig } from "./types";
@@ -60,10 +57,16 @@ function arms(args: {
 }): ExtractedArms {
   return {
     upper: args.upper
-      ? { ...arm("upper", args.upper.pool, args.upper.pull), role: args.dominant === "upper" ? "dominant" : "subordinate" }
+      ? {
+          ...arm("upper", args.upper.pool, args.upper.pull),
+          role: args.dominant === "upper" ? "dominant" : "subordinate",
+        }
       : null,
     lower: args.lower
-      ? { ...arm("lower", args.lower.pool, args.lower.pull), role: args.dominant === "lower" ? "dominant" : "subordinate" }
+      ? {
+          ...arm("lower", args.lower.pool, args.lower.pull),
+          role: args.dominant === "lower" ? "dominant" : "subordinate",
+        }
       : null,
     dominantSide: args.dominant,
   };
@@ -92,7 +95,10 @@ function assessment(
     },
     recommended: { playbook, strength: 0.7 },
     inputs: {
-      angle: { available: true, value: { angleDeg: 50, bracket: "TRENDING", direction } },
+      angle: {
+        available: true,
+        value: { angleDeg: 50, bracket: "TRENDING", direction },
+      },
       dwell: { available: false, reason: "test" },
       boundaryDistance: { available: false, reason: "test" },
       htfAgreement: { available: false, reason: "test" },
@@ -129,7 +135,13 @@ function trCandles(count: number, basePrice: number, range: number): Candle[] {
 }
 
 function cfg(overrides: Partial<ReachTradeConfig> = {}): ReachTradeConfig {
-  return { ...DEFAULT_REACH_CONFIG, ...overrides };
+  // REACH is OFF by default in production (allowedPlaybooks: []); these unit
+  // tests exercise its geometry, so re-enable the regimes it was built for.
+  return {
+    ...DEFAULT_REACH_CONFIG,
+    allowedPlaybooks: ["trending", "breakout"],
+    ...overrides,
+  };
 }
 
 // --- tests -----------------------------------------------------------------
@@ -162,6 +174,7 @@ describe("proposeReachTrade — happy paths", () => {
       }),
       pools: [upperP, lowerP],
       assessment: assessment("up"),
+      config: cfg(),
     });
     expect(plan).not.toBeNull();
     expect(plan!.phase).toBe("reach");
@@ -203,6 +216,7 @@ describe("proposeReachTrade — happy paths", () => {
       }),
       pools: [lowerP, upperP],
       assessment: assessment("down"),
+      config: cfg(),
     });
     expect(plan).not.toBeNull();
     expect(plan!.side).toBe("short");

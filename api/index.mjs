@@ -4394,7 +4394,11 @@ function computeAsymmetry(arms) {
 // server/modules/zenny/decision/reach/defaultConfig.ts
 var DEFAULT_REACH_CONFIG = {
   // REACH is for continuation / drive trades, not for fading a range edge.
-  allowedPlaybooks: ["trending", "breakout"],
+  // OFF by default as of 2026-05-31: the 3-week / 8-symbol validation showed
+  // REACH dragging results down (~4 points), and it is a half-built follow
+  // attempt. Stand aside in trending/breakout until a real follow module lands.
+  // Re-enable via config (allowedPlaybooks: ["trending","breakout"]) to test it.
+  allowedPlaybooks: [],
   // R1 — lowered 2.0 → 1.5 on 2026-05-09 after user observed setups
   // with asymmetry ~1.47 being missed. Still operates WITHIN the regime
   // gate; just relaxed the within-REACH threshold.
@@ -4682,14 +4686,18 @@ var DEFAULT_WICK_CONFIG = {
     requireTrendingRegime: false
   },
   // W3 — regime → entry style matrix. This is the regime GATE for fading.
-  // Per the 2026-05-30 deep-research (Scratch/regime-strategy-research-2026-05-30.md):
   // FADE only in mean-reverting regimes (ranging, accumulation). TRENDING and
   // BREAKOUT are FOLLOW regimes — fading there is what got the bot gamed — so
-  // they get NO fade styles (an empty list = stand aside; the follow playbook
-  // is a later module). The proposer tries the listed styles in order.
+  // they get NO fade styles (empty = stand aside; follow is a later module).
+  //
+  // Entry = 'under-touching' ONLY. 2026-05-31 validation (8 symbols, ~3 weeks):
+  // under-touching +1.62% (33% win, maxDD 6.3%) vs midpoint -13.11% (16% win,
+  // maxDD 16.2%) — same everything else. Entry placement is THE lever; the body
+  // line gives the stop room to breathe instead of guaranteed noise-outs. The
+  // other styles stay available as a tunable for the sweep, just not the default.
   regimeMatrix: {
-    ranging: ["midpoint", "extreme", "under-touching"],
-    accumulation: ["midpoint", "under-touching"],
+    ranging: ["under-touching"],
+    accumulation: ["under-touching"],
     trending: [],
     breakout: []
   },
@@ -5007,7 +5015,8 @@ async function runAnalysis(input) {
         const candles = await getCandles(input.provider, {
           symbol: input.symbol,
           timeframe: tf,
-          count: candleCount
+          count: candleCount,
+          endTimeMs: input.asOfMs
         });
         return { tf, candles };
       } catch {
@@ -5218,7 +5227,8 @@ async function runAnalysis(input) {
     qualification: qualifyPool({
       pool: p,
       candles: primaryCandles,
-      pivots: primaryPivots
+      pivots: primaryPivots,
+      config: input.qualifyConfig
     })
   }));
   for (const tf of analysedTfs) {
@@ -5285,7 +5295,9 @@ async function runAnalysis(input) {
     regimeAssessment: {
       primary: regimeAssessmentPerTimeframe[input.primaryTimeframe],
       perTimeframe: regimeAssessmentPerTimeframe
-    }
+    },
+    wickConfig: input.wickConfig,
+    reachConfig: input.reachConfig
   }) : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
   const primaryArms = armsPerTimeframe[input.primaryTimeframe] ?? {
     upper: null,

@@ -8,7 +8,11 @@ import type { ReachTradeConfig } from "./types";
 
 export const DEFAULT_REACH_CONFIG: ReachTradeConfig = {
   // REACH is for continuation / drive trades, not for fading a range edge.
-  allowedPlaybooks: ["trending", "breakout"],
+  // OFF by default as of 2026-05-31: the 3-week / 8-symbol validation showed
+  // REACH dragging results down (~4 points), and it is a half-built follow
+  // attempt. Stand aside in trending/breakout until a real follow module lands.
+  // Re-enable via config (allowedPlaybooks: ["trending","breakout"]) to test it.
+  allowedPlaybooks: [],
   // R1 — lowered 2.0 → 1.5 on 2026-05-09 after user observed setups
   // with asymmetry ~1.47 being missed. Still operates WITHIN the regime
   // gate; just relaxed the within-REACH threshold.

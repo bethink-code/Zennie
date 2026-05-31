@@ -43,14 +43,18 @@ export const DEFAULT_WICK_CONFIG: WickTradeConfig = {
   },
 
   // W3 — regime → entry style matrix. This is the regime GATE for fading.
-  // Per the 2026-05-30 deep-research (Scratch/regime-strategy-research-2026-05-30.md):
   // FADE only in mean-reverting regimes (ranging, accumulation). TRENDING and
   // BREAKOUT are FOLLOW regimes — fading there is what got the bot gamed — so
-  // they get NO fade styles (an empty list = stand aside; the follow playbook
-  // is a later module). The proposer tries the listed styles in order.
+  // they get NO fade styles (empty = stand aside; follow is a later module).
+  //
+  // Entry = 'under-touching' ONLY. 2026-05-31 validation (8 symbols, ~3 weeks):
+  // under-touching +1.62% (33% win, maxDD 6.3%) vs midpoint -13.11% (16% win,
+  // maxDD 16.2%) — same everything else. Entry placement is THE lever; the body
+  // line gives the stop room to breathe instead of guaranteed noise-outs. The
+  // other styles stay available as a tunable for the sweep, just not the default.
   regimeMatrix: {
-    ranging: ["midpoint", "extreme", "under-touching"],
-    accumulation: ["midpoint", "under-touching"],
+    ranging: ["under-touching"],
+    accumulation: ["under-touching"],
     trending: [],
     breakout: [],
   },

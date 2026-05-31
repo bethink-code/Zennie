@@ -185,6 +185,12 @@ describe("proposeWickTrade — fades qualified turning points", () => {
       arms: arms({ upper, lower, dominantSide: "upper" }),
       pools: [upper, lower],
       assessment: assessment("ranging"),
+      config: cfg({
+        regimeMatrix: {
+          ...DEFAULT_WICK_CONFIG.regimeMatrix,
+          ranging: ["midpoint"],
+        },
+      }),
     });
     expect(plan).not.toBeNull();
     expect(plan!.side).toBe("short");
@@ -218,6 +224,12 @@ describe("proposeWickTrade — fades qualified turning points", () => {
       arms: arms({ upper, lower, dominantSide: "lower" }),
       pools: [upper, lower],
       assessment: assessment("ranging"),
+      config: cfg({
+        regimeMatrix: {
+          ...DEFAULT_WICK_CONFIG.regimeMatrix,
+          ranging: ["midpoint"],
+        },
+      }),
     });
     expect(plan).not.toBeNull();
     expect(plan!.side).toBe("long");
