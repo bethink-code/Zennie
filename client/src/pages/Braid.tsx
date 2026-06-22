@@ -362,13 +362,16 @@ export default function Braid() {
   // Manual wick trade — the human's chosen box is placed via the wick-trade
   // endpoint, which sizes it to risk and hands it to the managed engine.
   const [tradeDraft, setTradeDraft] = useState<PositionDraft | null>(null);
+  // The timeframe a placed trade is tagged with — the chart's TF for a manual
+  // "New trade", or the picked wick's own source TF for choose-a-wick.
+  const [tradeTimeframe, setTradeTimeframe] = useState<Timeframe>(timeframe);
   const placeTrade = useMutation({
     mutationFn: async (draft: PositionDraft) => {
       const r = await apiRequest("/api/zenny/wick-trade", {
         method: "POST",
         body: JSON.stringify({
           symbol,
-          timeframe,
+          timeframe: tradeTimeframe,
           side: draft.side,
           entry: draft.entry,
           stop: draft.stop,
@@ -703,18 +706,19 @@ export default function Braid() {
             {settingsButtonLabel}
           </button>
           <button
-            onClick={() =>
-              setTradeDraft((d) =>
-                d
-                  ? null
-                  : {
-                      side: "long",
-                      entry: lastClose,
-                      stop: lastClose * 0.99,
-                      target: lastClose * 1.02,
-                    },
-              )
-            }
+            onClick={() => {
+              if (tradeDraft) {
+                setTradeDraft(null);
+              } else {
+                setTradeTimeframe(timeframe);
+                setTradeDraft({
+                  side: "long",
+                  entry: lastClose,
+                  stop: lastClose * 0.99,
+                  target: lastClose * 1.02,
+                });
+              }
+            }}
             disabled={!lastClose}
             className={`border rounded px-2 py-0.5 text-sm transition-colors ${tradeDraft ? "border-[#1d9e75] bg-[#1d9e75]/10 text-[#1d9e75]" : "border-black/15 hover:bg-[#f1efe8]"} ${!lastClose ? "opacity-40 cursor-not-allowed" : ""}`}
             title="Place a manual wick trade — drag the entry/stop/target box on the chart"
@@ -828,6 +832,9 @@ export default function Braid() {
                     Math.abs(entry - stop) || pool.linePrice * 0.005;
                   const target =
                     side === "short" ? entry - risk * 2 : entry + risk * 2;
+                  // The trade inherits the WICK's own timeframe, not the chart's
+                  // — click a higher-TF pool and you get a higher-TF trade.
+                  setTradeTimeframe(pool.sourceTimeframe as Timeframe);
                   setTradeDraft({ side, entry, stop, target });
                 }}
               />
