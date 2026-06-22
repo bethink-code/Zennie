@@ -118,6 +118,9 @@ interface Props {
     onCancel: () => void;
     busy?: boolean;
   };
+  // Choose-a-wick: click a (visible) swept pool to start a trade from it. The
+  // host derives the draft (side + geometry) from the pool.
+  onPickWick?: (pool: AnalysisStateClient["pools"][number]) => void;
 }
 
 // Off-screen indicator cap — only show the N closest to the visible range
@@ -159,6 +162,7 @@ export function LeftFrameCanvas({
   showSwingMarkers = false,
   maxLevelsPerSide = 0,
   positionTool,
+  onPickWick,
 }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -372,6 +376,40 @@ export function LeftFrameCanvas({
 
   // Click anywhere in the chart area → select that candle.
   // Click outside the chart area (inside the wrapper) → clear selection.
+  // Hit-test the (visible) swept pools for choose-a-wick. Uses the same rect
+  // geometry the canvas paints swept pools with (birth → sweep candle, wick
+  // extremes), so a click lands on what the eye sees.
+  const pickSweptPoolAt = (
+    mx: number,
+    my: number,
+  ): AnalysisStateClient["pools"][number] | null => {
+    if (!dims) return null;
+    for (const pool of state.pools) {
+      if (pool.status !== "swept") continue;
+      const yTop = dims.toY(pool.wickHigh);
+      const yBot = dims.toY(pool.wickLow);
+      const birthIdx = pool.birthCandleIndexOnPrimary;
+      const x1 =
+        birthIdx < 0
+          ? PAD.l
+          : dims.toX(Math.max(0, Math.min(dims.N - 1, birthIdx)));
+      const endIdx = pool.sweptCandleIndexOnPrimary;
+      const x2 =
+        endIdx !== null && endIdx !== undefined
+          ? dims.toX(Math.max(0, Math.min(dims.N - 1, endIdx)))
+          : PAD.l + dims.cw;
+      if (
+        mx >= x1 &&
+        mx <= x2 &&
+        my >= Math.min(yTop, yBot) &&
+        my <= Math.max(yTop, yBot)
+      ) {
+        return pool;
+      }
+    }
+    return null;
+  };
+
   const handleChartClick = (e: React.MouseEvent<HTMLDivElement>) => {
     // Trade mode vs inspect mode are mutually exclusive: while the position
     // tool is open, chart clicks belong to its handles, not candle selection.
@@ -388,6 +426,14 @@ export function LeftFrameCanvas({
     ) {
       setSelectedCandleIndex(null);
       return;
+    }
+    // Choose-a-wick: a click on a visible swept pool starts a trade from it.
+    if (onPickWick && showSweptPools) {
+      const pool = pickSweptPoolAt(mx, my);
+      if (pool) {
+        onPickWick(pool);
+        return;
+      }
     }
     const idx = Math.floor(((mx - PAD.l) / dims.cw) * dims.N);
     if (idx >= 0 && idx < dims.N) setSelectedCandleIndex(idx);

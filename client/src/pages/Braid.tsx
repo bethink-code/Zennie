@@ -812,6 +812,24 @@ export default function Braid() {
                       }
                     : undefined
                 }
+                onPickWick={(pool) => {
+                  // Side derives from the wick: a swept RESISTANCE fades short,
+                  // a swept SUPPORT fades long. Geometry seeds from the pool —
+                  // entry at the body line, stop beyond the swept wick, target a
+                  // default 2R the user then drags to the real opposite pool.
+                  const side = pool.type === "RESISTANCE" ? "short" : "long";
+                  const buffer = pool.linePrice * 0.001;
+                  const entry = pool.linePrice;
+                  const stop =
+                    side === "short"
+                      ? pool.wickHigh + buffer
+                      : pool.wickLow - buffer;
+                  const risk =
+                    Math.abs(entry - stop) || pool.linePrice * 0.005;
+                  const target =
+                    side === "short" ? entry - risk * 2 : entry + risk * 2;
+                  setTradeDraft({ side, entry, stop, target });
+                }}
               />
               {showOrdersLiqOverlay && (
                 <LiqOverlay
