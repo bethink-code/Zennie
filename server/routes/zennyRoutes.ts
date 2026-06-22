@@ -11,7 +11,6 @@ import { fetchRecentLiquidations } from "../modules/zenny/analysis/data/fetchRec
 import type { PassConfig } from "../modules/zenny/analysis/passes/types";
 import type { Timeframe } from "../../shared/zennyTypes";
 import { getDefaultBraidCountForTimeframe } from "../../shared/zennyBraidDefaults";
-import { runPaperTradeWatchlistTick } from "../modules/zenny/runner/watchlist";
 import {
   listAllPositions,
   listPositions,
@@ -163,67 +162,6 @@ export function registerZennyRoutes(app: Express) {
         breaker: provider.getBreakerState(),
         recentApiCalls: provider.getApiCallLog().slice(-20),
       });
-    },
-  );
-
-  // POST /api/zenny/dev/paper-trade-tick — local/dev helper to advance the
-  // runner from the authenticated UI. This keeps localhost testing honest
-  // without exposing a manual trigger in production.
-  app.post(
-    "/api/zenny/dev/paper-trade-tick",
-    isAuthenticated,
-    async (_req: Request, res: Response) => {
-      if (process.env.NODE_ENV === "production") {
-        return res.status(404).json({ error: "not_found" });
-      }
-      try {
-        const provider = getProvider();
-        const results = await runPaperTradeWatchlistTick(provider);
-        res.json({ ok: true, tickedAt: Date.now(), results });
-      } catch (err) {
-        console.error("[zenny] dev paper-trade-tick failed", err);
-        res.status(500).json({
-          error: "tick_failed",
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    },
-  );
-
-  // POST /api/zenny/paper-trade-tick — Vercel Cron entrypoint.
-  //
-  // Auth: Bearer ${process.env.CRON_SECRET}. On Vercel Pro native crons, the
-  // platform auto-injects this header using the same env var the handler reads,
-  // so they always match by construction (no sync drift like the GitHub Actions
-  // workaround had).
-  //
-  // Idempotent: hitting it twice in the same 15m bar is safe (lookahead guard
-  // in reduceStep skips already-evaluated bars).
-  app.post(
-    "/api/zenny/paper-trade-tick",
-    async (req: Request, res: Response) => {
-      const auth = req.headers.authorization ?? "";
-      const expected = process.env.CRON_SECRET;
-      if (!expected) {
-        return res.status(503).json({
-          error: "cron_secret_not_configured",
-          hint: "Set CRON_SECRET in Vercel env vars.",
-        });
-      }
-      if (auth !== `Bearer ${expected}`) {
-        return res.status(401).json({ error: "unauthorized" });
-      }
-      try {
-        const provider = getProvider();
-        const results = await runPaperTradeWatchlistTick(provider);
-        res.json({ ok: true, tickedAt: Date.now(), results });
-      } catch (err) {
-        console.error("[zenny] paper-trade-tick failed", err);
-        res.status(500).json({
-          error: "tick_failed",
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
     },
   );
 
