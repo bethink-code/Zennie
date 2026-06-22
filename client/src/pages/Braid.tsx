@@ -127,6 +127,17 @@ const VIEW_LABEL: Record<ChartScope, string> = {
   trades: "TRADES",
 };
 
+// Debounce a value so rapid changes (slider drags) settle before they trigger
+// downstream work (here: the analysis refetch).
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(t);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export default function Braid() {
   const { user } = useAuth();
   const [symbol, setSymbol] = usePersistedState(
@@ -344,7 +355,14 @@ export default function Braid() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const passConfigParam = encodeURIComponent(JSON.stringify(passConfig));
+  // Debounce the passConfig that drives the query so dragging the strength /
+  // weight sliders updates the chart locally (and the client-side level filter)
+  // without firing a fetch on every tick — the refetch lands ~350ms after you
+  // stop moving. Debounce the stringified form: passConfig is rebuilt each
+  // render, so the object reference is never stable, but its JSON is.
+  const passConfigStr = JSON.stringify(passConfig);
+  const debouncedPassConfigStr = useDebouncedValue(passConfigStr, 350);
+  const passConfigParam = encodeURIComponent(debouncedPassConfigStr);
   const queryKey = `/api/zenny/braid-view-model?symbol=${symbol}&timeframe=${timeframe}&count=${count}&passConfig=${passConfigParam}&refresh=${refreshNonce}`;
   const { data, isLoading, isFetching, error } = useQuery<AnalysisStateClient>({
     queryKey: [queryKey],
