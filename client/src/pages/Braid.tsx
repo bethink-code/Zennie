@@ -138,6 +138,83 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
+interface WickEvidence {
+  type: "RESISTANCE" | "SUPPORT";
+  timeframe: string;
+  sweepDepthPct: number;
+  reclaimed: boolean | null;
+  structureShifted: boolean | null;
+  displacement: number | null;
+}
+
+// Evidence inspector for a chosen wick — the FACTS the eye reads (how deep the
+// sweep ran, did it reclaim, did structure shift). Deliberately NO verdict: the
+// tool presents the inputs and records your call; it never grades the wick.
+function WickEvidenceCard({ ev }: { ev: WickEvidence }) {
+  const yn = (v: boolean | null) => (v === null ? "—" : v ? "yes" : "no");
+  const rows: Array<[string, string]> = [
+    ["Sweep depth", `${ev.sweepDepthPct.toFixed(2)}% past`],
+    ["Reclaimed", yn(ev.reclaimed)],
+    ["Structure shift", yn(ev.structureShifted)],
+  ];
+  if (ev.displacement != null && ev.displacement > 0) {
+    rows.push(["Displacement", `$${ev.displacement.toFixed(0)}`]);
+  }
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 10,
+        left: 10,
+        background: "white",
+        border: "1px solid rgba(0,0,0,0.12)",
+        borderRadius: 6,
+        padding: "8px 10px",
+        fontSize: 11,
+        fontFamily: "system-ui, sans-serif",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+        pointerEvents: "none",
+        minWidth: 190,
+        zIndex: 5,
+      }}
+    >
+      <div
+        style={{
+          fontWeight: 600,
+          color: "#3d3d3a",
+          marginBottom: 5,
+          letterSpacing: "0.04em",
+          fontSize: 10,
+        }}
+      >
+        WICK EVIDENCE · {ev.type} · {ev.timeframe}
+      </div>
+      {rows.map(([l, v]) => (
+        <div
+          key={l}
+          style={{ display: "flex", justifyContent: "space-between", gap: 12 }}
+        >
+          <span style={{ color: "#888780" }}>{l}</span>
+          <span style={{ color: "#3d3d3a", fontVariantNumeric: "tabular-nums" }}>
+            {v}
+          </span>
+        </div>
+      ))}
+      <div
+        style={{
+          marginTop: 6,
+          paddingTop: 5,
+          borderTop: "1px solid rgba(0,0,0,0.06)",
+          color: "#aaaaa3",
+          fontSize: 10,
+        }}
+      >
+        Facts only — the call is yours.
+      </div>
+    </div>
+  );
+}
+
 export default function Braid() {
   const { user } = useAuth();
   const [symbol, setSymbol] = usePersistedState(
@@ -383,6 +460,9 @@ export default function Braid() {
   // The timeframe a placed trade is tagged with — the chart's TF for a manual
   // "New trade", or the picked wick's own source TF for choose-a-wick.
   const [tradeTimeframe, setTradeTimeframe] = useState<Timeframe>(timeframe);
+  // The chosen wick's evidence (facts), shown while the tool is open. null for
+  // a manual "New trade" — there's no wick to inspect.
+  const [pickedWick, setPickedWick] = useState<WickEvidence | null>(null);
   const placeTrade = useMutation({
     mutationFn: async (draft: PositionDraft) => {
       const r = await apiRequest("/api/zenny/wick-trade", {
@@ -406,6 +486,7 @@ export default function Braid() {
           : "Trade placed",
       );
       setTradeDraft(null);
+      setPickedWick(null);
       setRefreshNonce((n) => n + 1);
     },
     onError: (err) => {
@@ -727,8 +808,10 @@ export default function Braid() {
             onClick={() => {
               if (tradeDraft) {
                 setTradeDraft(null);
+                setPickedWick(null);
               } else {
                 setTradeTimeframe(timeframe);
+                setPickedWick(null);
                 setTradeDraft({
                   side: "long",
                   entry: lastClose,
@@ -829,7 +912,10 @@ export default function Braid() {
                         value: tradeDraft,
                         onChange: setTradeDraft,
                         onConfirm: () => placeTrade.mutate(tradeDraft),
-                        onCancel: () => setTradeDraft(null),
+                        onCancel: () => {
+                          setTradeDraft(null);
+                          setPickedWick(null);
+                        },
                         busy: placeTrade.isPending,
                       }
                     : undefined
@@ -853,9 +939,25 @@ export default function Braid() {
                   // The trade inherits the WICK's own timeframe, not the chart's
                   // — click a higher-TF pool and you get a higher-TF trade.
                   setTradeTimeframe(pool.sourceTimeframe as Timeframe);
+                  const sweepDepthPct =
+                    pool.type === "RESISTANCE"
+                      ? ((pool.wickHigh - pool.linePrice) / pool.linePrice) * 100
+                      : ((pool.linePrice - pool.wickLow) / pool.linePrice) * 100;
+                  setPickedWick({
+                    type: pool.type,
+                    timeframe: pool.sourceTimeframe,
+                    sweepDepthPct,
+                    reclaimed: pool.qualification?.reclaimed ?? null,
+                    structureShifted:
+                      pool.qualification?.structureShifted ?? null,
+                    displacement: pool.qualification?.displacement ?? null,
+                  });
                   setTradeDraft({ side, entry, stop, target });
                 }}
               />
+              {pickedWick && tradeDraft && (
+                <WickEvidenceCard ev={pickedWick} />
+              )}
               {showOrdersLiqOverlay && (
                 <LiqOverlay
                   symbol={symbol}
