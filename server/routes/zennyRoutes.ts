@@ -16,9 +16,17 @@ import {
   listPositions,
   loadAccount,
   loadOpenPositions,
+  upsertPosition,
   type PaperAccountRow,
 } from "../modules/zenny/persistence/paperTradeStore";
 import type { PositionRecord } from "../modules/zenny/execution/types";
+import {
+  createPosition,
+  submitPosition,
+} from "../modules/zenny/execution/createPosition";
+import { DEFAULT_RISK_CONFIG } from "../modules/zenny/execution/riskConfig";
+import { buildManualTradePlan } from "../modules/zenny/decision/wick/buildManualTradePlan";
+import type { TradeSide } from "../modules/zenny/decision/types";
 
 // Single shared provider per process (Observer pattern — multi-tenant friendly).
 // In Phase 6 this becomes per-symbol via createMarketDataService.
@@ -223,6 +231,85 @@ export function registerZennyRoutes(app: Express) {
       } catch (err) {
         res.status(500).json({
           error: "fetch_failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // POST /api/zenny/wick-trade — place a MANUAL wick trade. The human chose the
+  // wick and the entry/stop/target; we validate the geometry, size it to the
+  // account-risk budget, and hand it to the managed execution engine (paper).
+  // anchorPoolId records which wick was chosen, so we can later measure whether
+  // the picked wicks beat the trade-everything baseline.
+  //
+  // Auth required (mutates the paper account). v0 is a single global paper
+  // account — multi-tenant scoping comes with the wider tenant work.
+  app.post(
+    "/api/zenny/wick-trade",
+    isAuthenticated,
+    async (req: Request, res: Response) => {
+      try {
+        const body = req.body ?? {};
+        const symbol = String(body.symbol || "").toUpperCase();
+        const timeframe = String(body.timeframe || "") as Timeframe;
+        const side = body.side as TradeSide;
+
+        if (!symbol || !timeframe) {
+          return res.status(400).json({ error: "missing_symbol_or_timeframe" });
+        }
+        if (side !== "long" && side !== "short") {
+          return res.status(400).json({ error: "invalid_side" });
+        }
+
+        const plan = buildManualTradePlan({
+          timeframe,
+          side,
+          entry: Number(body.entry),
+          stop: Number(body.stop),
+          target: Number(body.target),
+          anchorPoolId: body.anchorPoolId ?? null,
+          sizeMultiplier:
+            body.sizeMultiplier != null
+              ? Number(body.sizeMultiplier)
+              : undefined,
+        });
+        if (!plan) {
+          return res.status(400).json({ error: "invalid_geometry" });
+        }
+
+        const account = await loadAccount();
+        if (account.killStatus !== "OK") {
+          return res
+            .status(409)
+            .json({ error: "account_halted", killStatus: account.killStatus });
+        }
+
+        const now = Date.now();
+        const accountRiskPct =
+          body.accountRiskPct != null
+            ? Number(body.accountRiskPct)
+            : DEFAULT_RISK_CONFIG.accountRiskPct;
+
+        const drafted = createPosition({
+          id: `${symbol}-${timeframe}-manual-${now}`,
+          symbol,
+          plan,
+          emittedAtBarTs: now,
+          accountRiskPct,
+        });
+        const live = submitPosition(drafted, account.currentEquity, now);
+        if (live.status === "REJECTED") {
+          return res
+            .status(400)
+            .json({ error: "sizing_rejected", reason: live.rejectionReason });
+        }
+
+        await upsertPosition(live);
+        res.json({ ok: true, position: live });
+      } catch (err) {
+        res.status(500).json({
+          error: "place_failed",
           message: err instanceof Error ? err.message : String(err),
         });
       }
