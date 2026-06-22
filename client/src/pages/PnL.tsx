@@ -3,7 +3,9 @@
 // tab is for drilling in; this is the "show me everything" summary.
 
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { apiRequest } from "@/lib/queryClient";
 
 interface Position {
   symbol: string;
@@ -52,6 +54,22 @@ export default function PnL() {
     refetchInterval: 60_000, // light auto-refresh; this is an active monitor view
   });
 
+  // Advance open positions whenever this view opens (and on the Manage button).
+  // On-demand management — no background cron. The refetch shows the result.
+  const manage = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("/api/zenny/manage-positions", {
+        method: "POST",
+      });
+      return r.json();
+    },
+    onSuccess: () => refetch(),
+  });
+  useEffect(() => {
+    manage.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#f8f7f4] text-[#3d3d3a]">
       <header className="flex items-center justify-between border-b border-black/10 bg-white px-4 py-2">
@@ -70,6 +88,14 @@ export default function PnL() {
         </div>
         <div className="flex items-center gap-3 text-xs text-[#888780]">
           {data && <span>updated {new Date(data.computedAtMs).toLocaleTimeString()}</span>}
+          <button
+            onClick={() => manage.mutate()}
+            disabled={manage.isPending}
+            className="rounded border border-black/15 px-2 py-0.5 text-sm hover:bg-[#f1efe8] disabled:opacity-50"
+            title="Advance open positions over the latest bars (fill / stop / target / close)"
+          >
+            {manage.isPending ? "Managing…" : "Manage"}
+          </button>
           <button
             onClick={() => refetch()}
             disabled={isFetching}

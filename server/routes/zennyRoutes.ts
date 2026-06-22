@@ -27,6 +27,7 @@ import {
 import { DEFAULT_RISK_CONFIG } from "../modules/zenny/execution/riskConfig";
 import { buildManualTradePlan } from "../modules/zenny/decision/wick/buildManualTradePlan";
 import type { TradeSide } from "../modules/zenny/decision/types";
+import { manageOpenPositions } from "../modules/zenny/runner/manageOpenPositions";
 
 // Single shared provider per process (Observer pattern — multi-tenant friendly).
 // In Phase 6 this becomes per-symbol via createMarketDataService.
@@ -310,6 +311,25 @@ export function registerZennyRoutes(app: Express) {
       } catch (err) {
         res.status(500).json({
           error: "place_failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // POST /api/zenny/manage-positions — advance every open position over the
+  // latest bars (fill-on-touch, stops, targets, closes). Management only: it
+  // never places trades. On-demand (no cron); the P&L page calls it.
+  app.post(
+    "/api/zenny/manage-positions",
+    isAuthenticated,
+    async (_req: Request, res: Response) => {
+      try {
+        const result = await manageOpenPositions({ provider: getProvider() });
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        res.status(500).json({
+          error: "manage_failed",
           message: err instanceof Error ? err.message : String(err),
         });
       }
