@@ -995,10 +995,7 @@ export default function Braid() {
               chartHeight={chartHeight}
               collapsedContent={
                 <OrdersStrategyColumnCollapsed
-                  tradePlan={data.tradePlan}
-                  tradePlans={primaryPlans}
                   restingOrders={paperRestingOrders}
-                  assessment={data.regimeAssessment}
                   chartHeight={chartHeight}
                 />
               }
@@ -1006,11 +1003,7 @@ export default function Braid() {
                 <ColumnInnerTabs
                   info={
                     <OrdersStrategyColumnExpanded
-                      tradePlan={data.tradePlan}
-                      tradePlans={primaryPlans}
                       restingOrders={paperRestingOrders}
-                      assessment={data.regimeAssessment}
-                      chartHeight={chartHeight}
                     />
                   }
                   settings={
