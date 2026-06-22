@@ -271,6 +271,79 @@ describe("proposeWickTrade — fades qualified turning points", () => {
     expect(plan!.entry).toBe(100); // linePrice
   });
 
+  it("on-confirmation entry fills at current price (RESISTANCE short)", () => {
+    const upper = pool({
+      id: "u",
+      type: "RESISTANCE",
+      linePrice: 100,
+      wickHigh: 106,
+      wickLow: 100,
+      verdict: "turning-point",
+    });
+    const lower = pool({
+      id: "l",
+      type: "SUPPORT",
+      linePrice: 90,
+      wickHigh: 90,
+      wickLow: 86,
+    });
+    const plan = proposeWickTrade({
+      timeframe: TF,
+      candles: flatCandles(99),
+      currentPrice: 99,
+      arms: arms({ upper, lower, dominantSide: "upper" }),
+      pools: [upper, lower],
+      assessment: assessment("ranging"),
+      config: cfg({
+        regimeMatrix: {
+          ...DEFAULT_WICK_CONFIG.regimeMatrix,
+          ranging: ["on-confirmation"],
+        },
+      }),
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.side).toBe("short");
+    expect(plan!.entry).toBe(99); // currentPrice — fills, no deep-limit expiry
+    expect(plan!.stop).toBeCloseTo(106 + 0.198, 2); // wickHigh + 0.2%×99
+    expect(plan!.target).toBe(88); // opposite (lower) pool centre
+  });
+
+  it("on-confirmation entry fills at current price (SUPPORT long)", () => {
+    const lower = pool({
+      id: "l",
+      type: "SUPPORT",
+      linePrice: 100,
+      wickHigh: 100,
+      wickLow: 94,
+      verdict: "turning-point",
+    });
+    const upper = pool({
+      id: "u",
+      type: "RESISTANCE",
+      linePrice: 110,
+      wickHigh: 114,
+      wickLow: 110,
+    });
+    const plan = proposeWickTrade({
+      timeframe: TF,
+      candles: flatCandles(101),
+      currentPrice: 101,
+      arms: arms({ upper, lower, dominantSide: "lower" }),
+      pools: [upper, lower],
+      assessment: assessment("ranging"),
+      config: cfg({
+        regimeMatrix: {
+          ...DEFAULT_WICK_CONFIG.regimeMatrix,
+          ranging: ["on-confirmation"],
+        },
+      }),
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.side).toBe("long");
+    expect(plan!.entry).toBe(101); // currentPrice
+    expect(plan!.target).toBe(112); // opposite (upper) pool centre
+  });
+
   it("does NOT fade a run-through pool", () => {
     const upper = pool({
       id: "u",

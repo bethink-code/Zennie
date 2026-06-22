@@ -105,6 +105,7 @@ function tryStyle(args: TryStyleArgs): TradePlan | null {
     style,
     buffer,
     anticipatory: cfg.anticipatory,
+    currentPrice: input.currentPrice,
   });
   if (entry === null) return null;
   const stop = computeStop({ pool, style, buffer, beyond: cfg.beyond });

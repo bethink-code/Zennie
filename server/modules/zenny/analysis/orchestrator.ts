@@ -66,7 +66,6 @@ import type {
   QualifyConfig,
 } from "../decision/qualify/types";
 import type { WickTradeConfig } from "../decision/wick/types";
-import type { ReachTradeConfig } from "../decision/reach/types";
 
 // TF rank ordering — higher number = higher (slower) timeframe. Used to
 // filter pools per-TF: a TF chart should consider only pools at or above
@@ -236,7 +235,6 @@ export interface RunAnalysisInput {
   // the optimiser on top of it) can drive the whole pipeline from one config.
   qualifyConfig?: QualifyConfig;
   wickConfig?: WickTradeConfig;
-  reachConfig?: ReachTradeConfig;
 }
 
 export async function runAnalysis(
@@ -659,7 +657,6 @@ export async function runAnalysis(
           perTimeframe: regimeAssessmentPerTimeframe,
         },
         wickConfig: input.wickConfig,
-        reachConfig: input.reachConfig,
       })
     : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
 

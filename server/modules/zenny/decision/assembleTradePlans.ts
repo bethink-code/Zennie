@@ -1,16 +1,13 @@
-// assembleTradePlans — top-level entry that runs once per analysed TF and
-// produces TradePlans for every playbook family that resolves geometry.
+// assembleTradePlans — runs the wick proposer per analysed TF and returns the
+// TradePlan it would generate. This is the "trade every qualified wick"
+// MECHANICAL BASELINE — the bar a discretionary wick-selection has to beat. It
+// is NOT a live auto-trader (that path, the runner, was removed); it exists to
+// drive the backtest harness so we can measure selection edge against it.
 //
-// V2 (2026-05-14) the proposers can still emit multiple candidate geometries
-// for the same TF, but the assembler now chooses a single winner per TF.
-// That keeps the paper runner and the ORDERS view focused on the most
-// actionable idea instead of carrying contradictory intents at once.
+// Per the per-TF self-containment model, each TF stands alone: its own regime
+// assessment, its own arms + pools, its own trade plan.
 //
-// Per the per-TF self-containment model, each TF stands alone: its own
-// regime assessment, its own arms + pools, its own trade plans.
-//
-// Pure function. No DB. No order placement. The execution module
-// consumes these plans and turns them into orders.
+// Pure function. No DB. No order placement.
 
 import type { Candle, Timeframe } from "../../../../shared/zennyTypes";
 import type { ExtractedArms } from "../analysis/arms/extractArms";
@@ -19,9 +16,6 @@ import type {
   RegimeAssessmentResult,
   TfRegimeAssessment,
 } from "../analysis/regime/types";
-import { proposeReachTrade } from "./reach/proposeReachTrade";
-import type { ReachTradeConfig } from "./reach/types";
-import { selectTradePlansForTimeframe } from "./selectTradePlans";
 import type { TradePlan, TradePlanResult } from "./types";
 import { proposeWickTrade } from "./wick/proposeWickTrade";
 import type { WickTradeConfig } from "./wick/types";
@@ -33,7 +27,6 @@ export interface AssembleTradePlansInput {
   enrichedPoolsPerTimeframe: Partial<Record<Timeframe, AnalysisPool[]>>;
   regimeAssessment: RegimeAssessmentResult | null;
   wickConfig?: WickTradeConfig;
-  reachConfig?: ReachTradeConfig;
 }
 
 export function assembleTradePlans(
@@ -58,9 +51,7 @@ export function assembleTradePlans(
     const currentPrice = tfCandles[tfCandles.length - 1].close;
     if (currentPrice <= 0) continue;
 
-    const tfPlans: TradePlan[] = [];
-
-    // TAKE — sweep-fade (the wick module). Higher per-trade edge.
+    // TAKE — sweep-fade (the wick module). The mechanical baseline trade.
     const takePlan = proposeWickTrade({
       timeframe: tf,
       candles: tfCandles,
@@ -70,24 +61,9 @@ export function assembleTradePlans(
       assessment: tfAssessment,
       config: input.wickConfig,
     });
-    if (takePlan !== null) tfPlans.push(takePlan);
-
-    // REACH — pull-target (Phase 1). Fires more often than TAKE.
-    const reachPlan = proposeReachTrade({
-      timeframe: tf,
-      candles: tfCandles,
-      currentPrice,
-      arms: tfArms,
-      pools: tfPools,
-      assessment: tfAssessment,
-      config: input.reachConfig,
-    });
-    if (reachPlan !== null) tfPlans.push(reachPlan);
-
-    const selectedPlans = selectTradePlansForTimeframe(tfPlans, currentPrice);
-    if (selectedPlans.length > 0) {
-      plansPerTimeframe[tf] = selectedPlans;
-      perTimeframe[tf] = selectedPlans[0];
+    if (takePlan !== null) {
+      plansPerTimeframe[tf] = [takePlan];
+      perTimeframe[tf] = takePlan;
     }
   }
 

@@ -47,11 +47,15 @@ export const DEFAULT_WICK_CONFIG: WickTradeConfig = {
   // BREAKOUT are FOLLOW regimes — fading there is what got the bot gamed — so
   // they get NO fade styles (empty = stand aside; follow is a later module).
   //
-  // Entry = 'under-touching' ONLY. 2026-05-31 validation (8 symbols, ~3 weeks):
-  // under-touching +1.62% (33% win, maxDD 6.3%) vs midpoint -13.11% (16% win,
-  // maxDD 16.2%) — same everything else. Entry placement is THE lever; the body
-  // line gives the stop room to breathe instead of guaranteed noise-outs. The
-  // other styles stay available as a tunable for the sweep, just not the default.
+  // Entry = 'under-touching' (default retained). on-confirmation was trialled
+  // 2026-06-21 to fix the 257/280 live expiries, but it backtested WORSE over
+  // 8 symbols / ~20 days: on-confirmation -1.49% (36% win, expR -0.13) vs
+  // under-touching +5.84% (28% win, expR 0.55) — the wider stop + reclaim entry
+  // compresses R:R below the win-rate gain. UNRESOLVED: the same backtest does
+  // NOT reproduce the live mass-expiry (under-touching fills 53x and profits
+  // here), so backtest and live disagree on the entry — investigate that gap
+  // before re-choosing. on-confirmation kept as a tunable.
+  // See memory/zenny_piggyback_strategy.md.
   regimeMatrix: {
     ranging: ["under-touching"],
     accumulation: ["under-touching"],
@@ -62,6 +66,7 @@ export const DEFAULT_WICK_CONFIG: WickTradeConfig = {
   // Per-style size multipliers (conviction). Conservative inner entries get
   // full size; the wider-stop second-sweep gets less.
   sizeMultiplier: {
+    "on-confirmation": 1.0,
     "under-touching": 1.0,
     midpoint: 1.0,
     extreme: 1.0,

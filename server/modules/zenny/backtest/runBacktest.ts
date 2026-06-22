@@ -17,7 +17,6 @@ import type { Candle, Timeframe } from "../../../../shared/zennyTypes";
 import { TF_BAR_DURATION_MS } from "../../../../shared/zennyTypes";
 import { runAnalysis } from "../analysis/orchestrator";
 import type { QualifyConfig } from "../decision/qualify/types";
-import type { ReachTradeConfig } from "../decision/reach/types";
 import type { WickTradeConfig } from "../decision/wick/types";
 import { createPosition, submitPosition } from "../execution/createPosition";
 import {
@@ -36,7 +35,6 @@ export interface BacktestConfig {
   accountRiskPct?: number;
   qualifyConfig?: QualifyConfig;
   wickConfig?: WickTradeConfig;
-  reachConfig?: ReachTradeConfig;
   candleCount?: number; // analysis lookback per bar (default 200)
 }
 
@@ -56,6 +54,12 @@ export interface BacktestResult {
   trades: PositionRecord[]; // CLOSED, in close order
   equityCurve: Array<{ t: number; equity: number }>;
   summary: BacktestSummary;
+  // Order-lifecycle counts — the fill rate matters as much as the PnL. An
+  // order that never fills (EXPIRED, valid-bars-elapsed) is invisible in
+  // `trades`; these counts expose it so backtest fill rate can be compared to
+  // the live runner's.
+  submitted: number; // orders that reached LIVE (rested on the book)
+  expired: number; // LIVE → EXPIRED (never filled within entryValidBars)
 }
 
 interface BtAccount {
@@ -88,6 +92,8 @@ export async function runBacktest(
   const open = new Map<string, PositionRecord>();
   const closed: PositionRecord[] = [];
   const equityCurve: Array<{ t: number; equity: number }> = [];
+  let submitted = 0;
+  let expired = 0;
 
   // Unified ascending list of bar openTimes in the window (any symbol's grid;
   // 15m boundaries are shared across symbols).
@@ -103,7 +109,6 @@ export async function runBacktest(
         asOfMs: t,
         qualifyConfig: input.config?.qualifyConfig,
         wickConfig: input.config?.wickConfig,
-        reachConfig: input.config?.reachConfig,
       });
 
       const bar = barFromState(state.candles, t);
@@ -122,6 +127,7 @@ export async function runBacktest(
         open.set(next.id, next);
         if (TERMINAL.has(next.status)) {
           open.delete(next.id);
+          if (next.status === "EXPIRED") expired++;
           if (next.status === "CLOSED") {
             closed.push(next);
             if (next.realisedPnl !== null) applyPnl(account, next.realisedPnl);
@@ -157,6 +163,7 @@ export async function runBacktest(
           if (live.status === "LIVE") {
             open.set(live.id, live);
             openPhases.add(plan.phase);
+            submitted++;
           }
         }
       }
@@ -186,6 +193,8 @@ export async function runBacktest(
       account.currentEquity,
       equityCurve,
     ),
+    submitted,
+    expired,
   };
 }
 

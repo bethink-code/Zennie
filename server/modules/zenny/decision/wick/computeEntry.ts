@@ -13,6 +13,8 @@
 // pivot candle) and the wick extreme — the 50% of the wick territory.
 //
 // Entry rules per style (RESISTANCE / short trade shown; SUPPORT mirrors):
+//   on-confirmation : currentPrice — enter at the reclaim, the moment the
+//                  turning-point is confirmed, so the trade actually fills.
 //   midpoint     : (linePrice + wickHigh) / 2
 //   extreme      : wickHigh
 //   beyond       : wickHigh + buffer (entry only fires on second sweep)
@@ -31,10 +33,18 @@ export interface ComputeEntryInput {
   style: EntryStyle;
   buffer: number;
   anticipatory: AnticipatoryConfig;
+  currentPrice: number;
 }
 
 export function computeEntry(input: ComputeEntryInput): number | null {
-  const { pool, style, buffer, anticipatory } = input;
+  const { pool, style, buffer, anticipatory, currentPrice } = input;
+
+  // on-confirmation — enter at the reclaim/current price. The turning-point is
+  // already confirmed (sweep + reclaim + MSS via qualifyPool); resting a deeper
+  // limit (the other styles) risks the pullback never coming → unfilled. This
+  // fills, then rides to the opposite pool. Side-agnostic: the limit fills on
+  // the next bar that trades through current price.
+  if (style === "on-confirmation") return currentPrice;
 
   if (pool.type === "RESISTANCE") {
     // Short fade entries
