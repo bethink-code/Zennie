@@ -7,6 +7,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { LeftFrameCanvas } from "@/components/braid/LeftFrameCanvas";
+import type { PositionDraft } from "@/components/braid/PositionTool";
 import { NowColumn } from "@/components/braid/NowColumn";
 import {
   LevelsColumnCollapsed,
@@ -351,42 +352,37 @@ export default function Braid() {
     window.location.href = "/";
   };
 
-  const runPaperTick = useMutation({
-    mutationFn: async () => {
-      const r = await apiRequest("/api/zenny/dev/paper-trade-tick", {
+  // Manual wick trade — the human's chosen box is placed via the wick-trade
+  // endpoint, which sizes it to risk and hands it to the managed engine.
+  const [tradeDraft, setTradeDraft] = useState<PositionDraft | null>(null);
+  const placeTrade = useMutation({
+    mutationFn: async (draft: PositionDraft) => {
+      const r = await apiRequest("/api/zenny/wick-trade", {
         method: "POST",
+        body: JSON.stringify({
+          symbol,
+          timeframe,
+          side: draft.side,
+          entry: draft.entry,
+          stop: draft.stop,
+          target: draft.target,
+        }),
       });
       return r.json();
     },
     onSuccess: (payload: any) => {
-      const results: any[] = Array.isArray(payload?.results)
-        ? payload.results
-        : [];
-      const created = results.filter((r: any) => r?.newPositionId).length;
-      const transitions = results.reduce(
-        (n: number, r: any) =>
-          n + (Array.isArray(r?.transitions) ? r.transitions.length : 0),
-        0,
-      );
-      const blocked = results
-        .map((r: any) => r?.noTransitionReason)
-        .filter((v: any): v is string => typeof v === "string");
+      const pos = payload?.position;
       setLastTickSummary(
-        created > 0
-          ? `Paper tick: ${created} new ${created === 1 ? "position" : "positions"}`
-          : transitions > 0
-            ? `Paper tick: ${transitions} state ${transitions === 1 ? "change" : "changes"}`
-            : blocked.length > 0
-              ? `Paper tick: ${blocked[0]}`
-              : "Paper tick complete",
+        pos?.size != null
+          ? `Trade placed: ${pos.side} ${pos.symbol} · qty ${Number(pos.size).toFixed(4)}`
+          : "Trade placed",
       );
+      setTradeDraft(null);
       setRefreshNonce((n) => n + 1);
     },
     onError: (err) => {
       setLastTickSummary(
-        err instanceof Error
-          ? `Paper tick failed: ${err.message}`
-          : "Paper tick failed",
+        err instanceof Error ? `Place failed: ${err.message}` : "Place failed",
       );
     },
   });
@@ -690,16 +686,25 @@ export default function Braid() {
           >
             {settingsButtonLabel}
           </button>
-          {import.meta.env.DEV && (
-            <button
-              onClick={() => runPaperTick.mutate()}
-              disabled={runPaperTick.isPending}
-              className={`border rounded px-2 py-0.5 text-sm transition-colors ${runPaperTick.isPending ? "border-black/10 bg-[#f1efe8] text-[#888780] cursor-wait" : "border-black/15 hover:bg-[#f1efe8]"}`}
-              title="Advance the local paper-trading runner and refresh this chart"
-            >
-              {runPaperTick.isPending ? "Ticking..." : "Paper tick"}
-            </button>
-          )}
+          <button
+            onClick={() =>
+              setTradeDraft((d) =>
+                d
+                  ? null
+                  : {
+                      side: "long",
+                      entry: lastClose,
+                      stop: lastClose * 0.99,
+                      target: lastClose * 1.02,
+                    },
+              )
+            }
+            disabled={!lastClose}
+            className={`border rounded px-2 py-0.5 text-sm transition-colors ${tradeDraft ? "border-[#1d9e75] bg-[#1d9e75]/10 text-[#1d9e75]" : "border-black/15 hover:bg-[#f1efe8]"} ${!lastClose ? "opacity-40 cursor-not-allowed" : ""}`}
+            title="Place a manual wick trade — drag the entry/stop/target box on the chart"
+          >
+            {tradeDraft ? "Close tool" : "New trade"}
+          </button>
           <button
             onClick={() => setRefreshNonce((n) => n + 1)}
             disabled={isFetching}
@@ -779,6 +784,17 @@ export default function Braid() {
                   passConfig.aggregate.enabled
                     ? passConfig.aggregate.strengthThreshold
                     : 0
+                }
+                positionTool={
+                  tradeDraft
+                    ? {
+                        value: tradeDraft,
+                        onChange: setTradeDraft,
+                        onConfirm: () => placeTrade.mutate(tradeDraft),
+                        onCancel: () => setTradeDraft(null),
+                        busy: placeTrade.isPending,
+                      }
+                    : undefined
                 }
               />
               {showOrdersLiqOverlay && (
