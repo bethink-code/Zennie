@@ -59,7 +59,9 @@ export interface BraidPassConfig {
   wireAngle: BraidWireAnglePassConfig;
 }
 
-export const DEFAULT_BRAID_TIMEFRAME: Timeframe = "1H";
+// Manual wick trading floor is 1H; 4H is the primary working timeframe (the old
+// 15m default belonged to the retired auto-trader).
+export const DEFAULT_BRAID_TIMEFRAME: Timeframe = "4H";
 
 export const DEFAULT_BRAID_COUNT_BY_TIMEFRAME: Record<Timeframe, number> = {
   "15m": 500,
