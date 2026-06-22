@@ -141,6 +141,13 @@ export default function Braid() {
     "zenny.braid.count",
     DEFAULT_BRAID_COUNT,
   );
+  // Draft for the candle-count input — typing updates only this; the committed
+  // `count` (which drives the refetch) changes on Enter / blur, clamped. Stops
+  // a refetch firing on every keystroke.
+  const [countInput, setCountInput] = useState(String(count));
+  useEffect(() => {
+    setCountInput(String(count));
+  }, [count]);
   const [chartType, setChartType] = usePersistedState<"candles" | "line">(
     "zenny.braid.chartType",
     "candles",
@@ -458,6 +465,13 @@ export default function Braid() {
     (pos) => pos.fillPrice != null || pos.filledAtBarTs != null,
   );
 
+  const commitCountInput = () => {
+    const n = parseInt(countInput, 10);
+    const clamped = Number.isFinite(n) ? Math.max(50, Math.min(600, n)) : count;
+    setCount(clamped);
+    setCountInput(String(clamped));
+  };
+
   const viewSettings = (
     <div className="space-y-3 border-b border-black/5 pb-3">
       <SettingsGroup title="Market">
@@ -465,12 +479,14 @@ export default function Braid() {
           <span className="text-[#888780]">Candles</span>
           <input
             type="number"
-            value={count}
-            onChange={(e) =>
-              setCount(parseInt(e.target.value, 10) || defaultCount)
-            }
+            value={countInput}
+            onChange={(e) => setCountInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitCountInput();
+            }}
+            onBlur={commitCountInput}
             min={50}
-            max={1500}
+            max={600}
             step={50}
             className="border border-black/15 rounded px-2 py-1 bg-white text-sm"
           />

@@ -144,12 +144,20 @@ export function PositionTool({
         style={{
           position: "absolute",
           top: yEntry + 8,
-          left: Math.max(x + 8, x + w - 150),
+          left: Math.max(x + 8, x + w - 220),
           display: "flex",
           gap: 6,
           pointerEvents: "auto",
         }}
       >
+        <button
+          onClick={() => onChange(flipSide(value))}
+          disabled={busy}
+          style={btn(value.side === "long" ? COLOR.reward : COLOR.risk, false)}
+          title="Flip long / short"
+        >
+          {value.side === "long" ? "Long ⇄" : "Short ⇄"}
+        </button>
         <button onClick={onCancel} disabled={busy} style={btn("#888780", false)}>
           Cancel
         </button>
@@ -275,6 +283,26 @@ function clampDraft(d: PositionDraft, h: Handle): PositionDraft {
       d.entry = Math.max(d.target + eps, Math.min(d.stop - eps, d.entry));
   }
   return d;
+}
+
+// Flip long <-> short, mirroring stop and target across entry so the risk and
+// reward DISTANCES are preserved — only the direction changes, not the shape.
+function flipSide(d: PositionDraft): PositionDraft {
+  const risk = Math.abs(d.entry - d.stop);
+  const reward = Math.abs(d.target - d.entry);
+  return d.side === "long"
+    ? {
+        side: "short",
+        entry: d.entry,
+        stop: d.entry + risk,
+        target: d.entry - reward,
+      }
+    : {
+        side: "long",
+        entry: d.entry,
+        stop: d.entry - risk,
+        target: d.entry + reward,
+      };
 }
 
 function fmt(p: number): string {

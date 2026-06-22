@@ -183,12 +183,18 @@ export function LeftFrameCanvas({
     if (width === 0 || state.candles.length === 0) return null;
     const cw = width - PAD.l - PAD.r;
     const ch = H - PAD.t - PAD.b;
-    const candlePrices: number[] = state.candles.flatMap((c) => [
-      c.high,
-      c.low,
-    ]);
-    let minP = Math.min(...candlePrices);
-    let maxP = Math.max(...candlePrices);
+    const pricePoints: number[] = state.candles.flatMap((c) => [c.high, c.low]);
+    // Include the open position box so its entry/stop/target handles stay
+    // on-screen and draggable even when a handle sits outside the candle range.
+    if (positionTool) {
+      pricePoints.push(
+        positionTool.value.entry,
+        positionTool.value.stop,
+        positionTool.value.target,
+      );
+    }
+    let minP = Math.min(...pricePoints);
+    let maxP = Math.max(...pricePoints);
     const padPrice = (maxP - minP) * PRICE_PAD_FRACTION;
     minP -= padPrice;
     maxP += padPrice;
@@ -211,7 +217,13 @@ export function LeftFrameCanvas({
       candleWidth,
       halfWidth,
     };
-  }, [width, state.candles]);
+  }, [
+    width,
+    state.candles,
+    positionTool?.value.entry,
+    positionTool?.value.stop,
+    positionTool?.value.target,
+  ]);
 
   // Canvas paint — bg, grid, axis labels, pools, candles/line, border, header
   useEffect(() => {
@@ -361,6 +373,9 @@ export function LeftFrameCanvas({
   // Click anywhere in the chart area → select that candle.
   // Click outside the chart area (inside the wrapper) → clear selection.
   const handleChartClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Trade mode vs inspect mode are mutually exclusive: while the position
+    // tool is open, chart clicks belong to its handles, not candle selection.
+    if (positionTool) return;
     if (!dims) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const mx = e.clientX - rect.left;
@@ -569,7 +584,7 @@ export function LeftFrameCanvas({
           always on the OPPOSITE side from the candle (never blocks it).
           Clicks inside don't bubble to the wrapper so the popup itself
           doesn't clear selection. */}
-      {selectedCandle && selectedCandleIndex !== null && dims && (
+      {selectedCandle && selectedCandleIndex !== null && dims && !positionTool && (
         <CandleInfoPopup
           index={selectedCandleIndex}
           candle={selectedCandle}
