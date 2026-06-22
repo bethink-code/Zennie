@@ -553,8 +553,8 @@ export default function Braid() {
     expandedTab === "default"
       ? "Open default chart settings"
       : "Open settings for the default home view";
-  const primaryPlans =
-    data?.tradePlanResult?.plansPerTimeframe?.[data.primaryTimeframe] ?? [];
+  // Auto-decider trade plans are retired: the chart no longer draws a
+  // machine-picked trade. It still draws YOUR placed positions (below).
   const paperPositions = data?.paperPositions ?? [];
   const paperOpenPositions = data?.paperOpenPositions ?? [];
   const paperRestingOrders = paperOpenPositions.filter(
@@ -978,7 +978,7 @@ export default function Braid() {
                   Always on (trades are the point of the system). */}
               <TradeOverlay
                 candles={data.candles}
-                plans={chartView.showOrderPlans ? primaryPlans : []}
+                plans={[]}
                 positions={
                   chartView.showPaperTrades ? paperFilledPositions : []
                 }
