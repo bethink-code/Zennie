@@ -1,7 +1,7 @@
-// Braid page — PAST | NOW | TRADING layout.
+// Braid page — PAST | NOW layout.
 // PAST: LeftFrameCanvas (chart with candles, levels, pools)
 // NOW: Four expandable columns (Regime, Levels, Orders, Trades)
-// TRADING: future — two branch panels for pre-placed orders
+// (The TRADING right-frame braid was removed — superseded by the wick tool.)
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -21,7 +21,6 @@ import {
   OrdersStrategyColumnCollapsed,
   OrdersStrategyColumnExpanded,
 } from "@/components/braid/OrdersStrategyColumn";
-import { RightFrameCanvas } from "@/components/braid/RightFrameCanvas";
 import {
   TradesColumnCollapsed,
   TradesColumnExpanded,
@@ -193,10 +192,6 @@ export default function Braid() {
   const [maxLevelsPerSide, setMaxLevelsPerSide] = usePersistedState(
     "zenny.braid.maxLevelsPerSide",
     0,
-  );
-  const [rightFrameCandleCount, setRightFrameCandleCount] = usePersistedState(
-    "zenny.braid.rightFrameCandleCount",
-    25,
   );
   const [showLiqHeatmap, setShowLiqHeatmap] = usePersistedState(
     "zenny.braid.showLiqHeatmap",
@@ -1005,18 +1000,6 @@ export default function Braid() {
                   }
                 />
               }
-            />
-            {/* TRADING — right-frame canvas with the two-wire braid.
-                Each panel has its own focused Y scale (NOT the left frame's
-                full price range) so the arms breathe even when both are
-                close to current price. */}
-            <RightFrameCanvas
-              arms={data.arms}
-              candles={data.candles}
-              chartHeight={chartHeight}
-              width={280}
-              contextCandleCount={rightFrameCandleCount}
-              onChangeContextCandleCount={setRightFrameCandleCount}
             />
             {settingsOpen && (
               <PassPlayground
