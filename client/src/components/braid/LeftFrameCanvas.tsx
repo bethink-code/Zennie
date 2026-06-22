@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import type { AnalysisStateClient, LevelStrengthClient } from "./types";
 import { CHART_PAD, PRICE_PAD_FRACTION } from "./chartGeometry";
+import { PositionTool, type PositionDraft } from "./PositionTool";
 
 // Regime strip palette — coloured by *recommended playbook* per bar, not
 // raw wire-angle bracket. Bars where no playbook is recommended (NO_TRADE
@@ -107,6 +108,16 @@ interface Props {
   // Sorted by aggregate strength desc; if no aggregate score, by source TF
   // rank then by recency. 0 = no cap. Applied AFTER the strength threshold.
   maxLevelsPerSide?: number;
+  // Position tool overlay — when present, renders the draggable entry/stop/
+  // target widget bound to this chart's price scale. The host owns the draft
+  // state and the confirm/cancel actions (which post to /api/zenny/wick-trade).
+  positionTool?: {
+    value: PositionDraft;
+    onChange: (next: PositionDraft) => void;
+    onConfirm: () => void;
+    onCancel: () => void;
+    busy?: boolean;
+  };
 }
 
 // Off-screen indicator cap — only show the N closest to the visible range
@@ -124,6 +135,7 @@ interface Dims {
   pRange: number;
   N: number;
   toY: (p: number) => number;
+  fromY: (y: number) => number;
   toX: (i: number) => number;
   candleWidth: number;
   halfWidth: number;
@@ -146,6 +158,7 @@ export function LeftFrameCanvas({
   showLevels = true,
   showSwingMarkers = false,
   maxLevelsPerSide = 0,
+  positionTool,
 }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -193,6 +206,7 @@ export function LeftFrameCanvas({
       pRange,
       N,
       toY: (p: number) => PAD.t + ch - ((p - minP) / pRange) * ch,
+      fromY: (y: number) => minP + ((PAD.t + ch - y) / ch) * pRange,
       toX: (i: number) => PAD.l + ((i + 0.5) / N) * cw,
       candleWidth,
       halfWidth,
@@ -532,6 +546,23 @@ export function LeftFrameCanvas({
             </>
           )}
         </div>
+      )}
+      {dims && positionTool && (
+        <PositionTool
+          scale={{
+            toY: dims.toY,
+            fromY: dims.fromY,
+            leftX: PAD.l,
+            rightX: PAD.l + dims.cw,
+            width: dims.W,
+            height: H,
+          }}
+          value={positionTool.value}
+          onChange={positionTool.onChange}
+          onConfirm={positionTool.onConfirm}
+          onCancel={positionTool.onCancel}
+          busy={positionTool.busy}
+        />
       )}
       {/* Selected candle popup — copyable info card. Position flips left/right
           based on which half of the chart the candle is in, so the popup is
