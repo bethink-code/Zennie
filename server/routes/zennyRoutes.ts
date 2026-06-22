@@ -222,11 +222,54 @@ export function registerZennyRoutes(app: Express) {
         const closed = positions
           .filter((p) => p.status === "CLOSED")
           .sort((a, b) => (b.closedAtBarTs ?? 0) - (a.closedAtBarTs ?? 0));
+
+        // Mark in-trade (FILLED) positions to the latest price and compute
+        // unrealised P&L. One candle fetch per open stream — cheap for the few
+        // positions HTF trading carries.
+        const streams = [
+          ...new Set(
+            open
+              .filter((p) => p.status === "FILLED")
+              .map((p) => `${p.symbol}|${p.timeframe}`),
+          ),
+        ];
+        const markByStream = new Map<string, number>();
+        await Promise.all(
+          streams.map(async (key) => {
+            const [symbol, timeframe] = key.split("|") as [string, Timeframe];
+            try {
+              const candles = await getProvider().getCandles({
+                symbol,
+                timeframe,
+                count: 2,
+              });
+              const last = candles[candles.length - 1];
+              if (last) markByStream.set(key, last.close);
+            } catch {
+              /* a bad feed just leaves that row without a mark */
+            }
+          }),
+        );
+        let totalUnrealisedPnl = 0;
+        const openMarked = open.map((p) => {
+          if (p.status === "FILLED" && p.fillPrice != null && p.size != null) {
+            const mark = markByStream.get(`${p.symbol}|${p.timeframe}`);
+            if (mark != null) {
+              const dir = p.side === "long" ? 1 : -1;
+              const unrealisedPnl = (mark - p.fillPrice) * p.size * dir;
+              totalUnrealisedPnl += unrealisedPnl;
+              return { ...p, markPrice: mark, unrealisedPnl };
+            }
+          }
+          return p;
+        });
+
         res.json({
           account,
           pnl: summarisePnl(positions, account),
-          open,
+          open: openMarked,
           closed,
+          totalUnrealisedPnl,
           computedAtMs: Date.now(),
         });
       } catch (err) {

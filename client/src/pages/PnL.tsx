@@ -20,6 +20,8 @@ interface Position {
   targetPrice: number;
   realisedPnl: number | null;
   exitReason: string | null;
+  markPrice?: number;
+  unrealisedPnl?: number;
 }
 
 interface AllResponse {
@@ -40,6 +42,7 @@ interface AllResponse {
   };
   open: Position[];
   closed: Position[];
+  totalUnrealisedPnl?: number;
   computedAtMs: number;
 }
 
@@ -47,6 +50,11 @@ const px = (n: number | null) =>
   n === null ? "—" : n < 1 ? n.toFixed(5) : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 const money = (n: number) => `${n >= 0 ? "+" : "−"}$${Math.abs(n).toFixed(2)}`;
 const pnlColour = (n: number) => (n > 0 ? "#2f7d4f" : n < 0 ? "#b4453a" : "#888780");
+const rr = (p: Position): string => {
+  const risk = Math.abs(p.entryPrice - p.stopPrice);
+  const reward = Math.abs(p.targetPrice - p.entryPrice);
+  return risk > 0 ? `${(reward / risk).toFixed(1)}x` : "—";
+};
 
 export default function PnL() {
   const { data, isFetching, refetch } = useQuery<AllResponse | null>({
@@ -122,25 +130,64 @@ export default function PnL() {
             <Stat label="Kill switch" value={data.account.killStatus} sub={`drawdown ${data.account.drawdownPct.toFixed(1)}%`} colour={data.account.killStatus === "OK" ? "#2f7d4f" : "#b4453a"} />
           </div>
 
-          {/* Open */}
-          <Section title={`Open & resting orders (${data.open.length})`}>
-            {data.open.length === 0 ? (
-              <Empty>No open orders right now.</Empty>
-            ) : (
-              <Table
-                head={["Symbol", "TF", "Side", "State", "Entry", "Stop", "Target"]}
-                rows={data.open.map((p) => [
-                  p.symbol,
-                  p.timeframe,
-                  <Side key="s" side={p.side} />,
-                  p.status === "FILLED" ? "in trade" : "resting",
-                  px(p.status === "FILLED" ? p.fillPrice : p.entryPrice),
-                  px(p.stopPrice),
-                  px(p.targetPrice),
-                ])}
-              />
-            )}
-          </Section>
+          {/* Resting + In-trade — split so the lifecycle is legible. */}
+          {(() => {
+            const resting = data.open.filter((p) => p.status !== "FILLED");
+            const inTrade = data.open.filter((p) => p.status === "FILLED");
+            return (
+              <>
+                <Section title={`Resting orders (${resting.length})`}>
+                  {resting.length === 0 ? (
+                    <Empty>No resting orders.</Empty>
+                  ) : (
+                    <Table
+                      head={["Symbol", "TF", "Side", "Entry", "Stop", "Target", "R:R"]}
+                      rows={resting.map((p) => [
+                        p.symbol,
+                        p.timeframe,
+                        <Side key="s" side={p.side} />,
+                        px(p.entryPrice),
+                        px(p.stopPrice),
+                        px(p.targetPrice),
+                        rr(p),
+                      ])}
+                    />
+                  )}
+                </Section>
+
+                <Section
+                  title={`In trade (${inTrade.length})${
+                    inTrade.length > 0 && data.totalUnrealisedPnl != null
+                      ? ` · ${money(data.totalUnrealisedPnl)} unrealised`
+                      : ""
+                  }`}
+                >
+                  {inTrade.length === 0 ? (
+                    <Empty>No trades in progress.</Empty>
+                  ) : (
+                    <Table
+                      head={["Symbol", "TF", "Side", "Fill", "Stop", "Target", "Mark", "Unreal"]}
+                      rows={inTrade.map((p) => [
+                        p.symbol,
+                        p.timeframe,
+                        <Side key="s" side={p.side} />,
+                        px(p.fillPrice),
+                        px(p.stopPrice),
+                        px(p.targetPrice),
+                        px(p.markPrice ?? null),
+                        <span
+                          key="u"
+                          style={{ color: pnlColour(p.unrealisedPnl ?? 0) }}
+                        >
+                          {p.unrealisedPnl != null ? money(p.unrealisedPnl) : "—"}
+                        </span>,
+                      ])}
+                    />
+                  )}
+                </Section>
+              </>
+            );
+          })()}
 
           {/* Closed */}
           <Section title={`Closed trades (${data.closed.length})`}>
