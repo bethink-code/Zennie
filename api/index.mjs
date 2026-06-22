@@ -2757,7 +2757,7 @@ function median(values) {
 }
 
 // shared/zennyBraidDefaults.ts
-var DEFAULT_BRAID_TIMEFRAME = "1H";
+var DEFAULT_BRAID_TIMEFRAME = "4H";
 var DEFAULT_BRAID_COUNT_BY_TIMEFRAME = {
   "15m": 500,
   "1H": 300,
@@ -4366,196 +4366,6 @@ function computeATR(candles, period) {
   return sum / trs.length;
 }
 
-// server/modules/zenny/decision/reach/computeAsymmetry.ts
-function computeAsymmetry(arms) {
-  if (arms.dominantSide === "neither") return null;
-  const upperPull = arms.upper?.pullDecayed ?? 0;
-  const lowerPull = arms.lower?.pullDecayed ?? 0;
-  if (arms.dominantSide === "upper") {
-    if (upperPull <= 0) return null;
-    const asymmetry2 = lowerPull <= 0 ? 999 : upperPull / lowerPull;
-    return {
-      asymmetry: asymmetry2,
-      dominantSide: "upper",
-      dominantPull: upperPull,
-      subordinatePull: lowerPull
-    };
-  }
-  if (lowerPull <= 0) return null;
-  const asymmetry = upperPull <= 0 ? 999 : lowerPull / upperPull;
-  return {
-    asymmetry,
-    dominantSide: "lower",
-    dominantPull: lowerPull,
-    subordinatePull: upperPull
-  };
-}
-
-// server/modules/zenny/decision/reach/defaultConfig.ts
-var DEFAULT_REACH_CONFIG = {
-  // REACH is for continuation / drive trades, not for fading a range edge.
-  // OFF by default as of 2026-05-31: the 3-week / 8-symbol validation showed
-  // REACH dragging results down (~4 points), and it is a half-built follow
-  // attempt. Stand aside in trending/breakout until a real follow module lands.
-  // Re-enable via config (allowedPlaybooks: ["trending","breakout"]) to test it.
-  allowedPlaybooks: [],
-  // R1 — lowered 2.0 → 1.5 on 2026-05-09 after user observed setups
-  // with asymmetry ~1.47 being missed. Still operates WITHIN the regime
-  // gate; just relaxed the within-REACH threshold.
-  pullAsymmetryThreshold: 1.5,
-  // R2
-  entryMethod: "pullback-swing",
-  pullbackLookbackBars: 5,
-  // R3
-  stopAtrBufferMultiple: 0.25,
-  atrPeriod: 14,
-  // R4
-  tp1RatioOfPoolWidth: 0.2,
-  // Regime gating — direction must align (long REACH needs up direction)
-  requireDirectionAlignment: true,
-  // R5 — no time stop initially; matches TAKE convention E6
-  maxBarsInTrade: null,
-  // R6 — same R as TAKE per Van Tharp
-  sizeMultiplierVsTake: 1,
-  minRiskRewardRatio: 1,
-  // R7
-  conflictZoneAtrMultiple: 1,
-  // Effort vs Result filter — disabled until volume normalisation lands
-  effortVsResultFilterEnabled: false
-};
-
-// server/modules/zenny/decision/reach/findRecentSwing.ts
-function findRecentSwingLow(candles, lookbackBars) {
-  if (candles.length === 0) return null;
-  const start = Math.max(0, candles.length - lookbackBars);
-  let lo = Infinity;
-  for (let i = start; i < candles.length; i++) {
-    if (candles[i].low < lo) lo = candles[i].low;
-  }
-  return Number.isFinite(lo) ? lo : null;
-}
-function findRecentSwingHigh(candles, lookbackBars) {
-  if (candles.length === 0) return null;
-  const start = Math.max(0, candles.length - lookbackBars);
-  let hi = -Infinity;
-  for (let i = start; i < candles.length; i++) {
-    if (candles[i].high > hi) hi = candles[i].high;
-  }
-  return Number.isFinite(hi) ? hi : null;
-}
-
-// server/modules/zenny/decision/reach/proposeReachTrade.ts
-function proposeReachTrade(input) {
-  const cfg = input.config ?? DEFAULT_REACH_CONFIG;
-  const playbook = input.assessment.recommended?.playbook;
-  if (!playbook) return null;
-  if (!cfg.allowedPlaybooks.includes(playbook)) return null;
-  const asym = computeAsymmetry(input.arms);
-  if (asym === null) return null;
-  if (asym.asymmetry < cfg.pullAsymmetryThreshold) return null;
-  const dominantSide = asym.dominantSide;
-  const side = dominantSide === "upper" ? "long" : "short";
-  const dominantArm = dominantSide === "upper" ? input.arms.upper : input.arms.lower;
-  const oppositeArm = dominantSide === "upper" ? input.arms.lower : input.arms.upper;
-  if (!dominantArm) return null;
-  const dominantPool = dominantArm.pool;
-  if (cfg.requireDirectionAlignment) {
-    const angleInput = input.assessment.inputs.angle;
-    if (!angleInput.available || !angleInput.value) return null;
-    const direction = angleInput.value.direction;
-    if (side === "long" && direction !== "up") return null;
-    if (side === "short" && direction !== "down") return null;
-  }
-  const atr = computeATR(input.candles, cfg.atrPeriod);
-  if (atr === null) return null;
-  const distanceToPool = Math.abs(input.currentPrice - dominantPool.centreLine);
-  if (distanceToPool < atr * cfg.conflictZoneAtrMultiple) return null;
-  let entry = null;
-  if (cfg.entryMethod === "pullback-swing") {
-    entry = side === "long" ? findRecentSwingLow(input.candles, cfg.pullbackLookbackBars) : findRecentSwingHigh(input.candles, cfg.pullbackLookbackBars);
-  } else if (cfg.entryMethod === "at-market") {
-    entry = input.currentPrice;
-  }
-  if (entry === null) return null;
-  if (side === "long" && entry > input.currentPrice) entry = input.currentPrice;
-  if (side === "short" && entry < input.currentPrice) entry = input.currentPrice;
-  const buffer = atr * cfg.stopAtrBufferMultiple;
-  let stop;
-  let stopSource;
-  if (oppositeArm) {
-    stop = side === "long" ? oppositeArm.pool.wickLow - buffer : oppositeArm.pool.wickHigh + buffer;
-    stopSource = `opposite-arm wick + ${cfg.stopAtrBufferMultiple} \xD7 ATR`;
-  } else {
-    const dist = Math.abs(entry - dominantPool.centreLine);
-    stop = side === "long" ? entry - dist : entry + dist;
-    stopSource = "fallback (no opposite arm)";
-  }
-  const target = dominantPool.centreLine;
-  const poolWidth = Math.abs(
-    dominantPool.wickHigh - dominantPool.wickLow
-  );
-  const tp1Offset = poolWidth * cfg.tp1RatioOfPoolWidth;
-  const target2 = side === "long" ? target - tp1Offset : target + tp1Offset;
-  if (side === "long" && (stop >= entry || target <= entry)) return null;
-  if (side === "short" && (stop <= entry || target >= entry)) return null;
-  const riskAbs = Math.abs(entry - stop);
-  const rewardAbs = Math.abs(target - entry);
-  if (riskAbs === 0 || entry === 0) return null;
-  const riskRewardRatio = rewardAbs / riskAbs;
-  if (riskRewardRatio < cfg.minRiskRewardRatio) return null;
-  return {
-    timeframe: input.timeframe,
-    playbook,
-    phase: "reach",
-    side,
-    entry,
-    stop,
-    target,
-    target2,
-    // TP1 — execution v0 doesn't honour, but persisted for UI
-    riskRewardRatio,
-    riskPct: riskAbs / entry * 100,
-    sizeMultiplier: cfg.sizeMultiplierVsTake,
-    anchorPoolId: dominantPool.id,
-    rationale: [
-      `REACH ${side} \u2192 ${dominantSide} pool ${dominantPool.id}`,
-      `pull asymmetry ${asym.asymmetry.toFixed(2)} (threshold ${cfg.pullAsymmetryThreshold})`,
-      `entry: ${cfg.entryMethod}`,
-      `stop: ${stopSource}`,
-      `TP2 target: dominant pool centre; TP1 (target2) at ${cfg.tp1RatioOfPoolWidth.toFixed(2)}\xD7 pool width back`
-    ]
-  };
-}
-
-// server/modules/zenny/decision/selectTradePlans.ts
-var PHASE_PRIORITY = {
-  take: 0,
-  reach: 1
-};
-function selectTradePlansForTimeframe(plans, currentPrice) {
-  if (plans.length <= 1) return plans;
-  const [winner] = [...plans].sort(
-    (a, b) => compareTradePlans(a, b, currentPrice)
-  );
-  return winner ? [winner] : [];
-}
-function compareTradePlans(a, b, currentPrice) {
-  const actionabilityDiff = entryTravelInRiskUnits(a, currentPrice) - entryTravelInRiskUnits(b, currentPrice);
-  if (Math.abs(actionabilityDiff) > 1e-9) return actionabilityDiff;
-  const rawEntryDistanceDiff = Math.abs(a.entry - currentPrice) - Math.abs(b.entry - currentPrice);
-  if (Math.abs(rawEntryDistanceDiff) > 1e-9) return rawEntryDistanceDiff;
-  const rrDiff = b.riskRewardRatio - a.riskRewardRatio;
-  if (Math.abs(rrDiff) > 1e-9) return rrDiff;
-  const sizeDiff = b.sizeMultiplier - a.sizeMultiplier;
-  if (Math.abs(sizeDiff) > 1e-9) return sizeDiff;
-  return PHASE_PRIORITY[a.phase] - PHASE_PRIORITY[b.phase];
-}
-function entryTravelInRiskUnits(plan, currentPrice) {
-  const riskAbs = Math.abs(plan.entry - plan.stop);
-  if (riskAbs <= 0) return Number.POSITIVE_INFINITY;
-  return Math.abs(plan.entry - currentPrice) / riskAbs;
-}
-
 // server/modules/zenny/decision/wick/computeBuffer.ts
 function computeBuffer(price, candles, config) {
   const pctBuffer = price * config.percentage;
@@ -4571,7 +4381,8 @@ function computeBuffer(price, candles, config) {
 
 // server/modules/zenny/decision/wick/computeEntry.ts
 function computeEntry(input) {
-  const { pool: pool2, style, buffer, anticipatory } = input;
+  const { pool: pool2, style, buffer, anticipatory, currentPrice } = input;
+  if (style === "on-confirmation") return currentPrice;
   if (pool2.type === "RESISTANCE") {
     switch (style) {
       case "under-touching":
@@ -4690,11 +4501,15 @@ var DEFAULT_WICK_CONFIG = {
   // BREAKOUT are FOLLOW regimes — fading there is what got the bot gamed — so
   // they get NO fade styles (empty = stand aside; follow is a later module).
   //
-  // Entry = 'under-touching' ONLY. 2026-05-31 validation (8 symbols, ~3 weeks):
-  // under-touching +1.62% (33% win, maxDD 6.3%) vs midpoint -13.11% (16% win,
-  // maxDD 16.2%) — same everything else. Entry placement is THE lever; the body
-  // line gives the stop room to breathe instead of guaranteed noise-outs. The
-  // other styles stay available as a tunable for the sweep, just not the default.
+  // Entry = 'under-touching' (default retained). on-confirmation was trialled
+  // 2026-06-21 to fix the 257/280 live expiries, but it backtested WORSE over
+  // 8 symbols / ~20 days: on-confirmation -1.49% (36% win, expR -0.13) vs
+  // under-touching +5.84% (28% win, expR 0.55) — the wider stop + reclaim entry
+  // compresses R:R below the win-rate gain. UNRESOLVED: the same backtest does
+  // NOT reproduce the live mass-expiry (under-touching fills 53x and profits
+  // here), so backtest and live disagree on the entry — investigate that gap
+  // before re-choosing. on-confirmation kept as a tunable.
+  // See memory/zenny_piggyback_strategy.md.
   regimeMatrix: {
     ranging: ["under-touching"],
     accumulation: ["under-touching"],
@@ -4704,6 +4519,7 @@ var DEFAULT_WICK_CONFIG = {
   // Per-style size multipliers (conviction). Conservative inner entries get
   // full size; the wider-stop second-sweep gets less.
   sizeMultiplier: {
+    "on-confirmation": 1,
     "under-touching": 1,
     midpoint: 1,
     extreme: 1,
@@ -4748,7 +4564,8 @@ function tryStyle(args) {
     pool: pool2,
     style,
     buffer,
-    anticipatory: cfg.anticipatory
+    anticipatory: cfg.anticipatory,
+    currentPrice: input.currentPrice
   });
   if (entry === null) return null;
   const stop = computeStop({ pool: pool2, style, buffer, beyond: cfg.beyond });
@@ -4804,7 +4621,6 @@ function assembleTradePlans(input) {
     if (tfCandles.length === 0) continue;
     const currentPrice = tfCandles[tfCandles.length - 1].close;
     if (currentPrice <= 0) continue;
-    const tfPlans = [];
     const takePlan = proposeWickTrade({
       timeframe: tf,
       candles: tfCandles,
@@ -4814,21 +4630,9 @@ function assembleTradePlans(input) {
       assessment: tfAssessment,
       config: input.wickConfig
     });
-    if (takePlan !== null) tfPlans.push(takePlan);
-    const reachPlan = proposeReachTrade({
-      timeframe: tf,
-      candles: tfCandles,
-      currentPrice,
-      arms: tfArms,
-      pools: tfPools,
-      assessment: tfAssessment,
-      config: input.reachConfig
-    });
-    if (reachPlan !== null) tfPlans.push(reachPlan);
-    const selectedPlans = selectTradePlansForTimeframe(tfPlans, currentPrice);
-    if (selectedPlans.length > 0) {
-      plansPerTimeframe[tf] = selectedPlans;
-      perTimeframe[tf] = selectedPlans[0];
+    if (takePlan !== null) {
+      plansPerTimeframe[tf] = [takePlan];
+      perTimeframe[tf] = takePlan;
     }
   }
   return {
@@ -5296,8 +5100,7 @@ async function runAnalysis(input) {
       primary: regimeAssessmentPerTimeframe[input.primaryTimeframe],
       perTimeframe: regimeAssessmentPerTimeframe
     },
-    wickConfig: input.wickConfig,
-    reachConfig: input.reachConfig
+    wickConfig: input.wickConfig
   }) : { primary: null, perTimeframe: {}, plansPerTimeframe: {} };
   const primaryArms = armsPerTimeframe[input.primaryTimeframe] ?? {
     upper: null,
@@ -5397,17 +5200,148 @@ async function fetchRecentLiquidations(opts) {
   }));
 }
 
-// shared/zennyWatchlist.ts
-var WATCHLIST_SYMBOLS = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "SOLUSDT",
-  "BNBUSDT",
-  "XRPUSDT",
-  "DOGEUSDT",
-  "ADAUSDT",
-  "AVAXUSDT"
-];
+// server/modules/zenny/persistence/paperTradeStore.ts
+import { and as and3, eq as eq3 } from "drizzle-orm";
+function toRow(p) {
+  return {
+    id: p.id,
+    symbol: p.symbol,
+    timeframe: p.timeframe,
+    phase: p.phase,
+    side: p.side,
+    entryPrice: String(p.entryPrice),
+    stopPrice: String(p.stopPrice),
+    targetPrice: String(p.targetPrice),
+    riskPct: String(p.riskPct),
+    sizeMultiplier: String(p.sizeMultiplier),
+    size: p.size === null ? null : String(p.size),
+    notional: p.notional === null ? null : String(p.notional),
+    emittedAtBarTs: String(p.emittedAtBarTs),
+    submittedAtBarTs: p.submittedAtBarTs === null ? null : String(p.submittedAtBarTs),
+    filledAtBarTs: p.filledAtBarTs === null ? null : String(p.filledAtBarTs),
+    closedAtBarTs: p.closedAtBarTs === null ? null : String(p.closedAtBarTs),
+    fillPrice: p.fillPrice === null ? null : String(p.fillPrice),
+    closePrice: p.closePrice === null ? null : String(p.closePrice),
+    realisedPnl: p.realisedPnl === null ? null : String(p.realisedPnl),
+    status: p.status,
+    exitReason: p.exitReason,
+    rejectionReason: p.rejectionReason,
+    lastEvaluatedAt: String(p.lastEvaluatedAt),
+    updatedAt: /* @__PURE__ */ new Date()
+  };
+}
+function fromRow(r) {
+  return {
+    id: r.id,
+    symbol: r.symbol,
+    timeframe: r.timeframe,
+    phase: r.phase ?? "take",
+    side: r.side,
+    entryPrice: Number(r.entryPrice),
+    stopPrice: Number(r.stopPrice),
+    targetPrice: Number(r.targetPrice),
+    riskPct: Number(r.riskPct),
+    sizeMultiplier: Number(r.sizeMultiplier),
+    size: r.size === null ? null : Number(r.size),
+    notional: r.notional === null ? null : Number(r.notional),
+    emittedAtBarTs: Number(r.emittedAtBarTs),
+    submittedAtBarTs: r.submittedAtBarTs === null ? null : Number(r.submittedAtBarTs),
+    filledAtBarTs: r.filledAtBarTs === null ? null : Number(r.filledAtBarTs),
+    closedAtBarTs: r.closedAtBarTs === null ? null : Number(r.closedAtBarTs),
+    fillPrice: r.fillPrice === null ? null : Number(r.fillPrice),
+    closePrice: r.closePrice === null ? null : Number(r.closePrice),
+    realisedPnl: r.realisedPnl === null ? null : Number(r.realisedPnl),
+    status: r.status,
+    exitReason: r.exitReason ?? null,
+    rejectionReason: r.rejectionReason,
+    lastEvaluatedAt: Number(r.lastEvaluatedAt)
+  };
+}
+var OPEN_STATES = ["PLANNED", "LIVE", "FILLED"];
+async function loadOpenPositions(symbol, timeframe) {
+  const rows = await db.select().from(zennyPaperPositions).where(
+    and3(
+      eq3(zennyPaperPositions.symbol, symbol),
+      eq3(zennyPaperPositions.timeframe, timeframe)
+    )
+  );
+  return rows.filter((r) => OPEN_STATES.includes(r.status)).map(fromRow);
+}
+async function upsertPosition(p) {
+  const row = toRow(p);
+  await db.insert(zennyPaperPositions).values(row).onConflictDoUpdate({
+    target: zennyPaperPositions.id,
+    set: {
+      ...row,
+      updatedAt: /* @__PURE__ */ new Date()
+    }
+  });
+}
+async function listPositions(symbol, timeframe, limit = 100) {
+  const rows = await db.select().from(zennyPaperPositions).where(
+    and3(
+      eq3(zennyPaperPositions.symbol, symbol),
+      eq3(zennyPaperPositions.timeframe, timeframe)
+    )
+  ).limit(limit);
+  return rows.map(fromRow);
+}
+async function listAllPositions(limit = 100) {
+  const rows = await db.select().from(zennyPaperPositions).limit(limit);
+  return rows.map(fromRow);
+}
+var DEFAULT_ACCOUNT_ID = "default";
+var DEFAULT_STARTING_EQUITY = 500;
+async function loadAccount(id = DEFAULT_ACCOUNT_ID) {
+  const rows = await db.select().from(zennyPaperAccount).where(eq3(zennyPaperAccount.id, id));
+  if (rows.length === 0) {
+    const init = {
+      id,
+      startingEquity: String(DEFAULT_STARTING_EQUITY),
+      currentEquity: String(DEFAULT_STARTING_EQUITY),
+      peakEquity: String(DEFAULT_STARTING_EQUITY),
+      killStatus: "OK",
+      drawdownPct: "0"
+    };
+    await db.insert(zennyPaperAccount).values(init);
+    return {
+      id,
+      startingEquity: DEFAULT_STARTING_EQUITY,
+      currentEquity: DEFAULT_STARTING_EQUITY,
+      peakEquity: DEFAULT_STARTING_EQUITY,
+      killStatus: "OK",
+      drawdownPct: 0
+    };
+  }
+  const r = rows[0];
+  return {
+    id: r.id,
+    startingEquity: Number(r.startingEquity),
+    currentEquity: Number(r.currentEquity),
+    peakEquity: Number(r.peakEquity),
+    killStatus: r.killStatus,
+    drawdownPct: Number(r.drawdownPct)
+  };
+}
+async function upsertAccount(acct) {
+  await db.insert(zennyPaperAccount).values({
+    id: acct.id,
+    startingEquity: String(acct.startingEquity),
+    currentEquity: String(acct.currentEquity),
+    peakEquity: String(acct.peakEquity),
+    killStatus: acct.killStatus,
+    drawdownPct: String(acct.drawdownPct)
+  }).onConflictDoUpdate({
+    target: zennyPaperAccount.id,
+    set: {
+      currentEquity: String(acct.currentEquity),
+      peakEquity: String(acct.peakEquity),
+      killStatus: acct.killStatus,
+      drawdownPct: String(acct.drawdownPct),
+      updatedAt: /* @__PURE__ */ new Date()
+    }
+  });
+}
 
 // server/modules/zenny/execution/computeSize.ts
 function computeSize(input) {
@@ -5484,6 +5418,33 @@ function submitPosition(position, equity, submittedAtBarTs) {
 var DEFAULT_RISK_CONFIG = {
   accountRiskPct: 0.5
 };
+
+// server/modules/zenny/decision/wick/buildManualTradePlan.ts
+function buildManualTradePlan(input) {
+  const { timeframe, side, entry, stop, target } = input;
+  if (![entry, stop, target].every((n) => Number.isFinite(n) && n > 0)) {
+    return null;
+  }
+  if (side === "long" && !(stop < entry && entry < target)) return null;
+  if (side === "short" && !(target < entry && entry < stop)) return null;
+  const riskAbs = Math.abs(entry - stop);
+  const rewardAbs = Math.abs(target - entry);
+  if (riskAbs === 0) return null;
+  return {
+    timeframe,
+    playbook: input.playbook ?? "ranging",
+    phase: "take",
+    side,
+    entry,
+    stop,
+    target,
+    riskRewardRatio: rewardAbs / riskAbs,
+    riskPct: riskAbs / entry * 100,
+    sizeMultiplier: input.sizeMultiplier ?? 1,
+    anchorPoolId: input.anchorPoolId ?? null,
+    rationale: input.rationale ?? ["manual wick trade"]
+  };
+}
 
 // server/modules/zenny/execution/executionConfig.ts
 var DEFAULT_EXECUTION_CONFIG = {
@@ -5807,390 +5768,97 @@ function replayPosition(input) {
   return current;
 }
 
-// server/modules/zenny/persistence/paperTradeStore.ts
-import { and as and3, eq as eq3 } from "drizzle-orm";
-function toRow(p) {
-  return {
-    id: p.id,
-    symbol: p.symbol,
-    timeframe: p.timeframe,
-    phase: p.phase,
-    side: p.side,
-    entryPrice: String(p.entryPrice),
-    stopPrice: String(p.stopPrice),
-    targetPrice: String(p.targetPrice),
-    riskPct: String(p.riskPct),
-    sizeMultiplier: String(p.sizeMultiplier),
-    size: p.size === null ? null : String(p.size),
-    notional: p.notional === null ? null : String(p.notional),
-    emittedAtBarTs: String(p.emittedAtBarTs),
-    submittedAtBarTs: p.submittedAtBarTs === null ? null : String(p.submittedAtBarTs),
-    filledAtBarTs: p.filledAtBarTs === null ? null : String(p.filledAtBarTs),
-    closedAtBarTs: p.closedAtBarTs === null ? null : String(p.closedAtBarTs),
-    fillPrice: p.fillPrice === null ? null : String(p.fillPrice),
-    closePrice: p.closePrice === null ? null : String(p.closePrice),
-    realisedPnl: p.realisedPnl === null ? null : String(p.realisedPnl),
-    status: p.status,
-    exitReason: p.exitReason,
-    rejectionReason: p.rejectionReason,
-    lastEvaluatedAt: String(p.lastEvaluatedAt),
-    updatedAt: /* @__PURE__ */ new Date()
-  };
-}
-function fromRow(r) {
-  return {
-    id: r.id,
-    symbol: r.symbol,
-    timeframe: r.timeframe,
-    phase: r.phase ?? "take",
-    side: r.side,
-    entryPrice: Number(r.entryPrice),
-    stopPrice: Number(r.stopPrice),
-    targetPrice: Number(r.targetPrice),
-    riskPct: Number(r.riskPct),
-    sizeMultiplier: Number(r.sizeMultiplier),
-    size: r.size === null ? null : Number(r.size),
-    notional: r.notional === null ? null : Number(r.notional),
-    emittedAtBarTs: Number(r.emittedAtBarTs),
-    submittedAtBarTs: r.submittedAtBarTs === null ? null : Number(r.submittedAtBarTs),
-    filledAtBarTs: r.filledAtBarTs === null ? null : Number(r.filledAtBarTs),
-    closedAtBarTs: r.closedAtBarTs === null ? null : Number(r.closedAtBarTs),
-    fillPrice: r.fillPrice === null ? null : Number(r.fillPrice),
-    closePrice: r.closePrice === null ? null : Number(r.closePrice),
-    realisedPnl: r.realisedPnl === null ? null : Number(r.realisedPnl),
-    status: r.status,
-    exitReason: r.exitReason ?? null,
-    rejectionReason: r.rejectionReason,
-    lastEvaluatedAt: Number(r.lastEvaluatedAt)
-  };
-}
-var OPEN_STATES = ["PLANNED", "LIVE", "FILLED"];
-async function loadOpenPositions(symbol, timeframe) {
-  const rows = await db.select().from(zennyPaperPositions).where(
-    and3(
-      eq3(zennyPaperPositions.symbol, symbol),
-      eq3(zennyPaperPositions.timeframe, timeframe)
-    )
-  );
-  return rows.filter((r) => OPEN_STATES.includes(r.status)).map(fromRow);
-}
-async function upsertPosition(p) {
-  const row = toRow(p);
-  await db.insert(zennyPaperPositions).values(row).onConflictDoUpdate({
-    target: zennyPaperPositions.id,
-    set: {
-      ...row,
-      updatedAt: /* @__PURE__ */ new Date()
-    }
-  });
-}
-async function listPositions(symbol, timeframe, limit = 100) {
-  const rows = await db.select().from(zennyPaperPositions).where(
-    and3(
-      eq3(zennyPaperPositions.symbol, symbol),
-      eq3(zennyPaperPositions.timeframe, timeframe)
-    )
-  ).limit(limit);
-  return rows.map(fromRow);
-}
-async function listAllPositions(limit = 100) {
-  const rows = await db.select().from(zennyPaperPositions).limit(limit);
-  return rows.map(fromRow);
-}
-var DEFAULT_ACCOUNT_ID = "default";
-var DEFAULT_STARTING_EQUITY = 500;
-async function loadAccount(id = DEFAULT_ACCOUNT_ID) {
-  const rows = await db.select().from(zennyPaperAccount).where(eq3(zennyPaperAccount.id, id));
-  if (rows.length === 0) {
-    const init = {
-      id,
-      startingEquity: String(DEFAULT_STARTING_EQUITY),
-      currentEquity: String(DEFAULT_STARTING_EQUITY),
-      peakEquity: String(DEFAULT_STARTING_EQUITY),
-      killStatus: "OK",
-      drawdownPct: "0"
-    };
-    await db.insert(zennyPaperAccount).values(init);
-    return {
-      id,
-      startingEquity: DEFAULT_STARTING_EQUITY,
-      currentEquity: DEFAULT_STARTING_EQUITY,
-      peakEquity: DEFAULT_STARTING_EQUITY,
-      killStatus: "OK",
-      drawdownPct: 0
-    };
-  }
-  const r = rows[0];
-  return {
-    id: r.id,
-    startingEquity: Number(r.startingEquity),
-    currentEquity: Number(r.currentEquity),
-    peakEquity: Number(r.peakEquity),
-    killStatus: r.killStatus,
-    drawdownPct: Number(r.drawdownPct)
-  };
-}
-async function upsertAccount(acct) {
-  await db.insert(zennyPaperAccount).values({
-    id: acct.id,
-    startingEquity: String(acct.startingEquity),
-    currentEquity: String(acct.currentEquity),
-    peakEquity: String(acct.peakEquity),
-    killStatus: acct.killStatus,
-    drawdownPct: String(acct.drawdownPct)
-  }).onConflictDoUpdate({
-    target: zennyPaperAccount.id,
-    set: {
-      currentEquity: String(acct.currentEquity),
-      peakEquity: String(acct.peakEquity),
-      killStatus: acct.killStatus,
-      drawdownPct: String(acct.drawdownPct),
-      updatedAt: /* @__PURE__ */ new Date()
-    }
-  });
-}
-async function logTick(input) {
-  await db.insert(zennyPaperTickLog).values({
-    symbol: input.symbol,
-    timeframe: input.timeframe,
-    summary: input.summary,
-    error: input.error
-  });
-}
-
-// server/modules/zenny/runner/runPaperTradeTick.ts
-async function runPaperTradeTick(input) {
+// server/modules/zenny/runner/manageOpenPositions.ts
+var OPEN_STATES2 = ["PLANNED", "LIVE", "FILLED"];
+async function manageOpenPositions(input) {
   const cfg = input.config ?? DEFAULT_EXECUTION_CONFIG;
   const now = input.now ?? Date.now();
+  const candleCount = input.candleCount ?? 300;
   let account = await loadAccount();
-  const transitions = [];
-  let newPositionId = null;
-  let noTransitionReason = null;
-  if (account.killStatus === "HARD_TRIPPED") {
-    noTransitionReason = "kill-switch-hard-tripped";
-    await logTick({
-      symbol: input.symbol,
-      timeframe: input.timeframe,
-      summary: {
-        hadOpenPosition: false,
-        transitions,
-        account,
-        noTransitionReason
-      }
-    });
-    return {
-      symbol: input.symbol,
-      timeframe: input.timeframe,
-      tickAt: now,
-      hadOpenPosition: false,
-      newPositionId: null,
-      transitions,
-      account: pickAccount(account),
-      noTransitionReason
-    };
-  }
-  let analysisState;
-  try {
-    let liquidations = [];
-    try {
-      liquidations = await fetchRecentLiquidations({ symbol: input.symbol });
-    } catch {
-    }
-    analysisState = await runAnalysis({
-      provider: input.provider,
-      symbol: input.symbol,
-      primaryTimeframe: input.timeframe,
-      candleCountPerTf: input.candleCount ?? 200,
-      liquidations
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await logTick({
-      symbol: input.symbol,
-      timeframe: input.timeframe,
-      summary: { error: msg, account },
-      error: msg
-    });
-    throw err;
-  }
-  const closedBars = collectClosedBars(analysisState.candles, now);
-  const latestClosedBar = closedBars.at(-1) ?? null;
-  if (!latestClosedBar) {
-    noTransitionReason = "no-closed-bar-yet";
-    await logTick({
-      symbol: input.symbol,
-      timeframe: input.timeframe,
-      summary: {
-        hadOpenPosition: false,
-        transitions,
-        account,
-        noTransitionReason
-      }
-    });
-    return {
-      symbol: input.symbol,
-      timeframe: input.timeframe,
-      tickAt: now,
-      hadOpenPosition: false,
-      newPositionId: null,
-      transitions,
-      account: pickAccount(account),
-      noTransitionReason
-    };
-  }
-  const openPositions = await loadOpenPositions(input.symbol, input.timeframe);
-  for (const pos of openPositions) {
-    const before = pos.status;
-    const current = replayPosition({
-      position: pos,
-      bars: closedBars,
-      equity: account.currentEquity,
-      config: cfg
-    });
-    await upsertPosition(current);
-    if (current.status !== before) {
-      transitions.push({
-        id: current.id,
-        from: before,
-        to: current.status,
-        reason: current.exitReason
-      });
-    }
-    if (current.status === "CLOSED" && current.realisedPnl !== null) {
-      account = applyPnl(account, current.realisedPnl);
-    }
-  }
-  const tfPlans = analysisState.tradePlanResult.plansPerTimeframe?.[input.timeframe] ?? [];
-  const stillOpen = (await loadOpenPositions(input.symbol, input.timeframe)).filter(
-    (p) => p.status === "PLANNED" || p.status === "LIVE" || p.status === "FILLED"
+  const open = (await listAllPositions(1e3)).filter(
+    (p) => OPEN_STATES2.includes(p.status)
   );
-  const openPhases = new Set(stillOpen.map((p) => p.phase));
-  const newPositionIds = [];
-  if (account.killStatus === "OK") {
-    for (const plan of tfPlans) {
-      if (openPhases.has(plan.phase)) continue;
-      const drafted = createPosition({
-        id: makePositionId(
-          input.symbol,
-          input.timeframe,
-          plan.phase,
-          latestClosedBar.openTime
-        ),
-        symbol: input.symbol,
-        plan,
-        emittedAtBarTs: latestClosedBar.openTime,
-        accountRiskPct: DEFAULT_RISK_CONFIG.accountRiskPct
+  const byStream = /* @__PURE__ */ new Map();
+  for (const p of open) {
+    const key = `${p.symbol}|${p.timeframe}`;
+    const list = byStream.get(key);
+    if (list) list.push(p);
+    else byStream.set(key, [p]);
+  }
+  const transitions = [];
+  let evaluated = 0;
+  for (const [key, positions] of byStream) {
+    const [symbol, timeframe] = key.split("|");
+    let candles;
+    try {
+      candles = await input.provider.getCandles({
+        symbol,
+        timeframe,
+        count: candleCount
       });
-      const pos = submitPosition(
-        drafted,
-        account.currentEquity,
-        latestClosedBar.closeTime
-      );
-      await upsertPosition(pos);
-      newPositionIds.push(pos.id);
-      openPhases.add(plan.phase);
+    } catch {
+      continue;
+    }
+    const bars = candles.filter((c) => c.closeTime <= now).map((c) => ({
+      openTime: c.openTime,
+      closeTime: c.closeTime,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close
+    }));
+    for (const pos of positions) {
+      const before = pos.status;
+      const next = replayPosition({
+        position: pos,
+        bars,
+        equity: account.currentEquity,
+        config: cfg
+      });
+      evaluated++;
+      if (next.status !== before || next.lastEvaluatedAt !== pos.lastEvaluatedAt) {
+        await upsertPosition(next);
+      }
+      if (next.status !== before) {
+        transitions.push({
+          id: next.id,
+          from: before,
+          to: next.status,
+          reason: next.exitReason
+        });
+        if (next.status === "CLOSED" && next.realisedPnl !== null) {
+          account = applyPnl(account, next.realisedPnl);
+        }
+      }
     }
   }
-  if (newPositionIds.length > 0) {
-    newPositionId = newPositionIds[0];
-  } else if (tfPlans.length === 0 && stillOpen.length === 0) {
-    noTransitionReason = "no-trade-plan";
-  } else if (account.killStatus === "SOFT_TRIPPED") {
-    noTransitionReason = "kill-switch-soft-tripped";
-  }
-  const killOut = killSwitchEvaluate({
+  const ks = killSwitchEvaluate({
     currentEquity: account.currentEquity,
     peakEquity: account.peakEquity,
     startingEquity: account.startingEquity,
     previousKillStatus: account.killStatus,
     config: cfg
   });
-  account = {
-    ...account,
-    killStatus: killOut.killStatus,
-    drawdownPct: killOut.drawdownPct
-  };
+  account = { ...account, killStatus: ks.killStatus, drawdownPct: ks.drawdownPct };
   await upsertAccount(account);
-  await logTick({
-    symbol: input.symbol,
-    timeframe: input.timeframe,
-    summary: {
-      hadOpenPosition: openPositions.length > 0,
-      transitions,
-      newPositionId,
-      account: pickAccount(account),
-      noTransitionReason
-    }
-  });
   return {
-    symbol: input.symbol,
-    timeframe: input.timeframe,
-    tickAt: now,
-    hadOpenPosition: openPositions.length > 0,
-    newPositionId,
+    evaluated,
     transitions,
-    account: pickAccount(account),
-    noTransitionReason
+    account: {
+      currentEquity: account.currentEquity,
+      peakEquity: account.peakEquity,
+      killStatus: account.killStatus,
+      drawdownPct: account.drawdownPct
+    }
   };
 }
 function applyPnl(account, pnl) {
   const newEquity = account.currentEquity + pnl;
-  const newPeak = Math.max(account.peakEquity, newEquity);
   return {
     ...account,
     currentEquity: newEquity,
-    peakEquity: newPeak
+    peakEquity: Math.max(account.peakEquity, newEquity)
   };
-}
-function pickAccount(account) {
-  return {
-    currentEquity: account.currentEquity,
-    peakEquity: account.peakEquity,
-    killStatus: account.killStatus,
-    drawdownPct: account.drawdownPct
-  };
-}
-function collectClosedBars(candles, now) {
-  const bars = [];
-  for (const c of candles) {
-    if (c.closeTime <= now) {
-      bars.push({
-        openTime: c.openTime,
-        closeTime: c.closeTime,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close
-      });
-    }
-  }
-  return bars;
-}
-function makePositionId(symbol, timeframe, phase, bar) {
-  return `${symbol}-${timeframe}-${phase}-${bar}`;
-}
-
-// server/modules/zenny/runner/watchlist.ts
-var PAPER_TRADE_WATCHLIST = WATCHLIST_SYMBOLS.map((symbol) => ({ symbol, timeframe: "15m" }));
-async function runPaperTradeWatchlistTick(provider) {
-  const results = [];
-  for (const watch of PAPER_TRADE_WATCHLIST) {
-    try {
-      const r = await runPaperTradeTick({
-        provider,
-        symbol: watch.symbol,
-        timeframe: watch.timeframe
-      });
-      results.push(r);
-    } catch (e) {
-      results.push({
-        symbol: watch.symbol,
-        timeframe: watch.timeframe,
-        error: e instanceof Error ? e.message : String(e)
-      });
-    }
-  }
-  return results;
 }
 
 // server/routes/zennyRoutes.ts
@@ -6306,53 +5974,6 @@ function registerZennyRoutes(app2) {
       });
     }
   );
-  app2.post(
-    "/api/zenny/dev/paper-trade-tick",
-    isAuthenticated,
-    async (_req, res) => {
-      if (process.env.NODE_ENV === "production") {
-        return res.status(404).json({ error: "not_found" });
-      }
-      try {
-        const provider = getProvider();
-        const results = await runPaperTradeWatchlistTick(provider);
-        res.json({ ok: true, tickedAt: Date.now(), results });
-      } catch (err) {
-        console.error("[zenny] dev paper-trade-tick failed", err);
-        res.status(500).json({
-          error: "tick_failed",
-          message: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
-  );
-  app2.post(
-    "/api/zenny/paper-trade-tick",
-    async (req, res) => {
-      const auth = req.headers.authorization ?? "";
-      const expected = process.env.CRON_SECRET;
-      if (!expected) {
-        return res.status(503).json({
-          error: "cron_secret_not_configured",
-          hint: "Set CRON_SECRET in Vercel env vars."
-        });
-      }
-      if (auth !== `Bearer ${expected}`) {
-        return res.status(401).json({ error: "unauthorized" });
-      }
-      try {
-        const provider = getProvider();
-        const results = await runPaperTradeWatchlistTick(provider);
-        res.json({ ok: true, tickedAt: Date.now(), results });
-      } catch (err) {
-        console.error("[zenny] paper-trade-tick failed", err);
-        res.status(500).json({
-          error: "tick_failed",
-          message: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
-  );
   app2.get(
     "/api/zenny/paper-trades",
     async (req, res) => {
@@ -6392,16 +6013,120 @@ function registerZennyRoutes(app2) {
         ]);
         const open = positions.filter((p) => ["PLANNED", "LIVE", "FILLED"].includes(p.status)).sort((a, b) => a.symbol.localeCompare(b.symbol));
         const closed = positions.filter((p) => p.status === "CLOSED").sort((a, b) => (b.closedAtBarTs ?? 0) - (a.closedAtBarTs ?? 0));
+        const streams = [
+          ...new Set(
+            open.filter((p) => p.status === "FILLED").map((p) => `${p.symbol}|${p.timeframe}`)
+          )
+        ];
+        const markByStream = /* @__PURE__ */ new Map();
+        await Promise.all(
+          streams.map(async (key) => {
+            const [symbol, timeframe] = key.split("|");
+            try {
+              const candles = await getProvider().getCandles({
+                symbol,
+                timeframe,
+                count: 2
+              });
+              const last = candles[candles.length - 1];
+              if (last) markByStream.set(key, last.close);
+            } catch {
+            }
+          })
+        );
+        let totalUnrealisedPnl = 0;
+        const openMarked = open.map((p) => {
+          if (p.status === "FILLED" && p.fillPrice != null && p.size != null) {
+            const mark = markByStream.get(`${p.symbol}|${p.timeframe}`);
+            if (mark != null) {
+              const dir = p.side === "long" ? 1 : -1;
+              const unrealisedPnl = (mark - p.fillPrice) * p.size * dir;
+              totalUnrealisedPnl += unrealisedPnl;
+              return { ...p, markPrice: mark, unrealisedPnl };
+            }
+          }
+          return p;
+        });
         res.json({
           account,
           pnl: summarisePnl(positions, account),
-          open,
+          open: openMarked,
           closed,
+          totalUnrealisedPnl,
           computedAtMs: Date.now()
         });
       } catch (err) {
         res.status(500).json({
           error: "fetch_failed",
+          message: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  );
+  app2.post(
+    "/api/zenny/wick-trade",
+    isAuthenticated,
+    async (req, res) => {
+      try {
+        const body = req.body ?? {};
+        const symbol = String(body.symbol || "").toUpperCase();
+        const timeframe = String(body.timeframe || "");
+        const side = body.side;
+        if (!symbol || !timeframe) {
+          return res.status(400).json({ error: "missing_symbol_or_timeframe" });
+        }
+        if (side !== "long" && side !== "short") {
+          return res.status(400).json({ error: "invalid_side" });
+        }
+        const plan = buildManualTradePlan({
+          timeframe,
+          side,
+          entry: Number(body.entry),
+          stop: Number(body.stop),
+          target: Number(body.target),
+          anchorPoolId: body.anchorPoolId ?? null,
+          sizeMultiplier: body.sizeMultiplier != null ? Number(body.sizeMultiplier) : void 0
+        });
+        if (!plan) {
+          return res.status(400).json({ error: "invalid_geometry" });
+        }
+        const account = await loadAccount();
+        if (account.killStatus !== "OK") {
+          return res.status(409).json({ error: "account_halted", killStatus: account.killStatus });
+        }
+        const now = Date.now();
+        const accountRiskPct = body.accountRiskPct != null ? Number(body.accountRiskPct) : DEFAULT_RISK_CONFIG.accountRiskPct;
+        const drafted = createPosition({
+          id: `${symbol}-${timeframe}-manual-${now}`,
+          symbol,
+          plan,
+          emittedAtBarTs: now,
+          accountRiskPct
+        });
+        const live = submitPosition(drafted, account.currentEquity, now);
+        if (live.status === "REJECTED") {
+          return res.status(400).json({ error: "sizing_rejected", reason: live.rejectionReason });
+        }
+        await upsertPosition(live);
+        res.json({ ok: true, position: live });
+      } catch (err) {
+        res.status(500).json({
+          error: "place_failed",
+          message: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  );
+  app2.post(
+    "/api/zenny/manage-positions",
+    isAuthenticated,
+    async (_req, res) => {
+      try {
+        const result = await manageOpenPositions({ provider: getProvider() });
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        res.status(500).json({
+          error: "manage_failed",
           message: err instanceof Error ? err.message : String(err)
         });
       }
