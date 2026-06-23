@@ -1,0 +1,8 @@
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm run build", "npm run build:server"]
+
+[start]
+cmd = "node dist-server/index.mjs"
