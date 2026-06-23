@@ -25,6 +25,7 @@ import {
 import {
   TradesColumnCollapsed,
   TradesColumnExpanded,
+  type AllData,
 } from "@/components/braid/TradesColumn";
 import { LiqOverlay } from "@/components/braid/LiqOverlay";
 import { TradeOverlay } from "@/components/braid/TradeOverlay";
@@ -495,6 +496,25 @@ export default function Braid() {
       );
     },
   });
+
+  // Paper-trades all-symbols view — loaded on demand when TRADES tab opens.
+  const { data: allTrades, refetch: refetchAllTrades } = useQuery<AllData>({
+    queryKey: ["/api/zenny/paper-trades/all"],
+    enabled: tradesExpanded,
+    refetchInterval: false,
+  });
+  const managePositions = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("/api/zenny/manage-positions", { method: "POST" });
+      return r.json();
+    },
+    onSuccess: () => refetchAllTrades(),
+  });
+  // Advance positions each time the TRADES tab opens.
+  useEffect(() => {
+    if (tradesExpanded) managePositions.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tradesExpanded]);
 
   const coin = symbol.replace(/USDT$/i, "").toLowerCase();
   const { data: liqData, isFetching: liqFetching } = useQuery<{
@@ -1158,8 +1178,9 @@ export default function Braid() {
                 <ColumnInnerTabs
                   info={
                     <TradesColumnExpanded
-                      positions={paperFilledPositions}
-                      openPositions={paperOpenTrades}
+                      allData={allTrades ?? null}
+                      onManage={() => managePositions.mutate()}
+                      managing={managePositions.isPending}
                     />
                   }
                   settings={
@@ -1171,6 +1192,7 @@ export default function Braid() {
                 />
               }
             />
+
             {settingsOpen && (
               <PassPlayground
                 config={passConfig}
